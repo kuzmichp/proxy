@@ -7,22 +7,27 @@
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <netdb.h>
-#include <time.h>
 #include <arpa/inet.h>
 
 #define ERR(source) (perror(source),\
 		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
 		     exit(EXIT_FAILURE))
 
-#define MAX_MSG_SIZE 64
 #define BACKLOG 3
-#define MAX_IN_DATA_LENGTH 1500
+#define MAX_IN_DATA_LENGTH 65535
+#define MAX_LOGIN_LENGTH 16
+#define MAX_SERV_NAME_LENGTH 16
+#define MAX_INT_DIGITS_NUM 32
+#define DELIMITERS_NUM 4
+
+typedef struct {
+    char login[MAX_LOGIN_LENGTH];
+    char service[MAX_SERV_NAME_LENGTH];
+} conn_data;
 
 volatile sig_atomic_t do_work = 1;
 
@@ -42,6 +47,8 @@ ssize_t bulk_read(int fd, char *buf, size_t count);
 
 ssize_t bulk_write(int fd, char *buf, size_t count);
 
+void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_data, int in_size);
+
 void sigint_handler(int sig)
 {
     do_work = 0;
@@ -53,9 +60,8 @@ void usage(char *name)
     exit(EXIT_FAILURE);
 }
 
-void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size)
+void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_data cl_info)
 {
-
     int i;
 
     int app_sock;
@@ -69,6 +75,18 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size)
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
     sigprocmask(SIG_BLOCK, &mask, &old_mask);
+
+    /*
+     * Message for sending to proxy server
+     */
+    char *msg;
+    size_t msg_size = 0;
+
+    /*
+     * Proxy server response
+     */
+    char resp[MAX_IN_DATA_LENGTH];
+    ssize_t resp_size;
 
     while (do_work)
     {
@@ -86,15 +104,32 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size)
                      * Getting data from application
                      */
                     if ((*in_size = TEMP_FAILURE_RETRY(recv(app_sock, in_data, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
-                	//if ((*in_size = bulk_read(app_sock, in_data, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
+
+                    /*
+                     * Not used because of unknown incoming data size
+                     * if ((*in_size = bulk_read(app_sock, in_data, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
+                     */
+
+                    /*
+                     * Prepare message for sending to proxy server
+                     */
+                    msg = (char *) malloc(sizeof(char));
+                    prepare_message(&msg, &msg_size, cl_info, in_data, *in_size);
 
                     /*
                      * Sending data to proxy server
                      * Broken PIPE is treated as critical error here
                      */
-                    if (bulk_write(out_sock, in_data, *in_size) < 0) { ERR("write"); }
+                    if (bulk_write(out_sock, msg, msg_size) < 0) { ERR("write"); }
+                    if ((resp_size = bulk_read(out_sock, resp, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
 
-					if (TEMP_FAILURE_RETRY(close(app_sock))<0) { ERR("close"); }
+                    fprintf(stderr, "Response from server\n");
+
+                    for (i = 0; i < resp_size; ++i) {
+                        fprintf(stderr, "%c", resp[i]);
+                    }
+
+					if (TEMP_FAILURE_RETRY(close(app_sock)) < 0) { ERR("close"); }
 				}
             }
         }
@@ -107,6 +142,52 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size)
     }
 
     sigprocmask(SIG_UNBLOCK, &mask, NULL);
+}
+
+void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_data, int in_size)
+{
+    /*
+     * Store size of read data as char array
+     */
+    char *num;
+    int num_length;
+
+    /*
+     * Store login and service name here
+     */
+    size_t login_length = strnlen(cl_info.login, MAX_LOGIN_LENGTH);
+    size_t service_length = strnlen(cl_info.service, MAX_SERV_NAME_LENGTH);
+    char login[login_length];
+    char service[service_length];
+
+    char msg_type = '0';
+
+    /*
+     * Determine num of digits of packet size
+     */
+    num = (char *) malloc(MAX_INT_DIGITS_NUM * sizeof(char));
+    if (num == NULL) { ERR("malloc"); }
+
+    if  ((num_length = sprintf(num, "%d", in_size)) < 0) { ERR("sprintf"); }
+    if ((num = realloc(num, num_length)) == NULL) { ERR("realloc"); }
+
+    /*
+     * Copy login and service name to temporary array
+     */
+    memcpy(login, cl_info.login, strnlen(cl_info.login, MAX_LOGIN_LENGTH));
+    memcpy(service, cl_info.service, strnlen(cl_info.service, MAX_SERV_NAME_LENGTH));
+
+    /*
+     * +1 byte for '\0' that snprintf adds at the end
+     */
+    *msg_size = (2 + DELIMITERS_NUM + login_length + service_length + num_length + in_size) * sizeof(char);
+    if ((*msg = realloc(*msg, *msg_size)) == NULL) { ERR("realloc"); }
+
+    /*
+     * TYPE SIZE_OF_DATA LOGIN SERVICE DATA
+     */
+    //TODO: Check return value
+    snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, login, service, in_data);
 }
 
 int main(int argc, char *argv[])
@@ -126,12 +207,10 @@ int main(int argc, char *argv[])
     char *in_data;
     int in_size;
 
-
-
-    //int i;
-
-    char *msg = (char *) malloc(MAX_MSG_SIZE * sizeof(char));
-    if (msg == NULL) { ERR("malloc"); }
+    /*
+     * Temporary structure, which will be used to transfer parameters between functions
+     */
+    conn_data cl_info;
 
     /*
      * 0. program name
@@ -144,14 +223,27 @@ int main(int argc, char *argv[])
     if (argc != 6) { usage(argv[0]); }
 
     /*
+     * Initialization of cl_info structure
+     */
+
+    fprintf(stderr, "Login length: %li\n", strlen(argv[1]));
+
+    /*
+     * Copy login and service name to temporary structure
+     */
+    //TODO: Check memcpy return
+    memcpy(cl_info.login, argv[1], strnlen(argv[1], MAX_LOGIN_LENGTH));
+    memcpy(cl_info.service, argv[4], strnlen(argv[4], MAX_SERV_NAME_LENGTH));
+
+    /*
      * Setting sig handlers
      */
     if (sethandler(SIG_IGN, SIGPIPE)) { ERR("Setting SIGPIPE:"); }
 	if (sethandler(sigint_handler, SIGINT)) { ERR("Setting SIGINT"); }
 
     /*
-    * Establish connection with proxy server
-    */
+     * Establish connection with proxy server
+     */
     out_sock = connect_socket(argv[2], atoi(argv[3]));
 
     /*
@@ -165,23 +257,9 @@ int main(int argc, char *argv[])
      * Main client function
      */
     in_data = (char *) calloc(MAX_IN_DATA_LENGTH, sizeof(char));
-    get_in_data(in_sock, out_sock, in_data, &in_size);
+    get_in_data(in_sock, out_sock, in_data, &in_size, cl_info);
+
     if (TEMP_FAILURE_RETRY(close(in_sock)) < 0) { ERR("close:"); }
-
-
-
-
-
-
-
-
-    if (sprintf(msg, "0 GET / HTTP/1.1\r\n\r\n") < 0) { ERR("sprintf"); }
-
-    if (bulk_write(out_sock, msg, MAX_MSG_SIZE) < 0) { ERR("write"); }
-
-    free(msg);
-    /* Broken PIPE is treated as critical error here */
-
     if (TEMP_FAILURE_RETRY(close(out_sock)) < 0) { ERR("close:"); }
 
     return EXIT_SUCCESS;
@@ -265,9 +343,9 @@ int connect_socket(char *name, uint16_t port){
 int make_socket(void)
 {
     int sock;
+
     sock = socket(PF_INET, SOCK_STREAM, 0);
-    if (sock < 0)
-        ERR("socket");
+    if (sock < 0) { ERR("socket"); }
 
     return sock;
 }
@@ -293,29 +371,29 @@ int bind_tcp_socket(uint16_t port)
 	return socketfd;
 }
 
-int sethandler(void (*f)(int), int sigNo) {
+int sethandler(void (*f)(int), int sigNo)
+{
     struct sigaction act;
     memset(&act, 0x00, sizeof(struct sigaction));
     act.sa_handler = f;
 
-    if (-1 == sigaction(sigNo, &act, NULL))
-        ERR("sigaction");
+    if (-1 == sigaction(sigNo, &act, NULL)) { ERR("sigaction"); }
 
     return 0;
 }
 
-struct sockaddr_in make_address(char *address, uint16_t port){
+struct sockaddr_in make_address(char *address, uint16_t port)
+{
     struct sockaddr_in addr;
     struct hostent *hostinfo;
+
     addr.sin_family = AF_INET;
     addr.sin_port = htons (port);
-    //addr.sin_port = htons (80);
+
     hostinfo = gethostbyname(address);
-
-    //hostinfo = gethostbyname("google.com");
-
-    if(hostinfo == NULL)ERR("gethostbyname");
+    if(hostinfo == NULL) { ERR("gethostbyname"); }
     addr.sin_addr = *(struct in_addr*) hostinfo->h_addr;
+
     return addr;
 }
 
