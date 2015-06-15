@@ -106,6 +106,8 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
                      */
                     if ((*in_size = TEMP_FAILURE_RETRY(recv(app_sock, in_data, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
 
+                    fprintf(stderr, "Size: %d", *in_size);
+
                     /*
                      * if ((*in_size = bulk_read(app_sock, in_data, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
                      */
@@ -156,10 +158,10 @@ void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_d
     /*
      * Store login and service name here
      */
-    size_t login_length = strnlen(cl_info.login, MAX_LOGIN_LENGTH);
-    size_t service_length = strnlen(cl_info.service, MAX_SERV_NAME_LENGTH);
-    char login[login_length];
-    char service[service_length];
+    size_t login_length = strnlen(cl_info.login, MAX_LOGIN_LENGTH) + 1;
+    size_t service_length = strnlen(cl_info.service, MAX_SERV_NAME_LENGTH) + 1;
+    //char login[login_length];
+    //char service[service_length];
 
     char msg_type = '0';
 
@@ -175,8 +177,8 @@ void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_d
     /*
      * Copy login and service name to temporary array
      */
-    memcpy(login, cl_info.login, strnlen(cl_info.login, MAX_LOGIN_LENGTH));
-    memcpy(service, cl_info.service, strnlen(cl_info.service, MAX_SERV_NAME_LENGTH));
+    //memcpy(login, cl_info.login, strnlen(cl_info.login, MAX_LOGIN_LENGTH));
+    //memcpy(service, cl_info.service, strnlen(cl_info.service, MAX_SERV_NAME_LENGTH));
 
     /*
      * +1 byte for '\0' that snprintf adds at the end
@@ -184,10 +186,13 @@ void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_d
     *msg_size = (2 + DELIMITERS_NUM + login_length + service_length + num_length + in_size) * sizeof(char);
     if ((*msg = realloc(*msg, *msg_size)) == NULL) { ERR("realloc"); }
 
+    //printf("Login: %s\n", login);
+
     /*
      * TYPE SIZE_OF_DATA LOGIN SERVICE DATA
      */
-    if (snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, login, service, in_data) < 0) { ERR("snprintf"); }
+    //if (snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, login, service, in_data) < 0) { ERR("snprintf"); }
+    if (snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, cl_info.login, cl_info.service, in_data) < 0) { ERR("snprintf"); }
 }
 
 int main(int argc, char *argv[])
@@ -232,8 +237,11 @@ int main(int argc, char *argv[])
      * Copy login and service name to temporary structure
      */
     //TODO: Check memcpy return
-    memcpy(cl_info.login, argv[1], strnlen(argv[1], MAX_LOGIN_LENGTH));
-    memcpy(cl_info.service, argv[4], strnlen(argv[4], MAX_SERV_NAME_LENGTH));
+    //if (snprintf(cl_info.login, strlen(argv[1]) + 1, "%s", argv[1]) < 0) { ERR("snprintf"); }
+    memcpy(cl_info.login, argv[1], strnlen(argv[1], MAX_LOGIN_LENGTH) + 1);
+    memcpy(cl_info.service, argv[4], strnlen(argv[4], MAX_SERV_NAME_LENGTH) + 1);
+
+    printf("Login: %s\n", cl_info.login);
 
     /*
      * Setting sig handlers

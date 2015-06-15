@@ -76,6 +76,15 @@ typedef struct {
     ssize_t msg_size;
 } thread_arg;
 
+typedef struct
+{
+    char type;
+    char data_size[32];
+    char login[64];
+    char serv_name[32];
+    char data[65535];
+} cl_msg;
+
 volatile sig_atomic_t do_work = 1;
 
 int sethandler(void (*f)(int), int sigNo);
@@ -304,7 +313,7 @@ void communicate(service **services, client **clients, int *services_num, int *c
             //(*services)[pos - 1]->port = request->port;
 
             /*for (i = 0; i < *services_num; ++i) {
-                fprintf(stderr, "SERVICE NAME: %s - HOST: %s - PORT: %d\n", services[i]->name, services[i]->host, services[i]->port);
+                fprintf(stderr, "SERVICE NAME: %s - HOST: %s - PORT: %d\nument 3 has ", services[i]->name, services[i]->host, services[i]->port);
             }*/
 
 
@@ -389,7 +398,7 @@ void *client_thread_func(void *arg)
 
     int sock;
 
-    int serv_ex = 1;
+    bool serv_ex = false;
 	
     sigset_t mask;
     sigemptyset(&mask);
@@ -397,6 +406,23 @@ void *client_thread_func(void *arg)
 
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0) { ERR("pthread_mask"); }
 
+    /*
+     * Parsowanie wiadomosci od klienta
+     */
+    cl_msg client_msg;
+
+    if (sscanf(targ->msg, "%c %s %s %s %s", &client_msg.type, client_msg.data_size, client_msg.login, client_msg.serv_name, client_msg.data) != 5) { ERR("sscanf"); }
+
+    printf("MSG: \n%s\n", targ->msg);
+
+    fprintf(stderr, "Size: %s\n", client_msg.data_size);
+    fprintf(stderr, "Type: %c\n", client_msg.type);
+    fprintf(stderr, "Login: %s\n", client_msg.login);
+    fprintf(stderr, "Service: %s\n", client_msg.serv_name);
+
+    /*
+     * Sprawdzanie pozycji separatorow
+     */
     for (i = 0; i < targ->msg_size; ++i)
     {
         if (targ->msg[i] == ' ' && del_num < 4)
@@ -405,91 +431,39 @@ void *client_thread_func(void *arg)
         }
     }
 
-    data_size = (char *) calloc(del_pos[1] - del_pos[0] - 1, sizeof(char));
-
-	if ((serv = (char *) malloc(32 * sizeof(char))) == NULL) { ERR("malloc"); }
-
-	serv_name_length = del_pos[3] - del_pos[2] - 1;
-
-
-    memcpy(&msg_type, targ->msg, sizeof(char));
-    memcpy(data_size, targ->msg + del_pos[0] + 1, (del_pos[1] - del_pos[0] - 1) * sizeof(char));
-    memcpy(login, targ->msg + del_pos[1] + 1, (del_pos[2] - del_pos[1] - 1) * sizeof(char));
-    memcpy(serv, targ->msg + del_pos[2] + 1, (del_pos[3] - del_pos[2] - 1) * sizeof(char));
-    memcpy(data, targ->msg + del_pos[3] + 1, atoi(data_size));
+    memset(client_msg.data, 0, strlen(client_msg.data));
+    memcpy(client_msg.data, targ->msg + del_pos[3] + 1, atoi(client_msg.data_size));
     
-    if ((serv = realloc(serv, serv_name_length * sizeof(char))) == NULL) { ERR("realloc"); }
+    //if ((serv = realloc(serv, serv_name_length * sizeof(char))) == NULL) { ERR("realloc"); }
     
     for	(i = 0; i < *(targ->services_num); i++)
     {
-    	if (strncmp((*(targ->services)[i]).name, serv, serv_name_length) == 0) { serv_ex = 0; }
+    	if (strncmp((*(targ->services)[i]).name, client_msg.serv_name, strlen(client_msg.serv_name)) == 0) { serv_ex = true; }
     }
    
 	sock = *(targ->sock);
     
-    if (serv_ex == 1)
+    /*if (serv_ex == false)
 	{
 		if (bulk_write(sock, "Service doesn't exist", strlen("Service doesn't exist")) < 0) { ERR("write"); }
 		if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) { ERR("pthread_sigmask"); }
 
 		free(targ);
 		return NULL;
-	}
-	
-    /*if (atoi(&msg[0]) == 0)
-{
-    manage_client_connection(msg, size, services, clients, services_num, clients_num, serv_mutex, cl_mutex);
-}
-else
-{
-    //manage_admin_connection(msg, size, services, clients, services_num, clients_num, serv_mutex, cl_mutex);
-}*/
+	}*/
 
-    
-    fprintf(stderr, "(int) Data: \n");
-    
-    for	(i = 0; i < atoi(data_size); i++)
-    {
-    	fprintf(stderr, "%d", (int) data[i]);
-    }
-    
-    fprintf(stderr, "\nData: %s\n", data);
-
-    fd = connect_socket("google.com", 80);
-
-    fprintf(stderr, "\nConnected to service\n");
+    fd = connect_socket("stackoverflow.com", 80);
 
     //char d[200] = "GET http://google.com/ HTTP/1.1\r\n\r\n";
 
-    if (bulk_write(fd, data, atoi(data_size)) < 0) { ERR("write"); }
+    if (bulk_write(fd, client_msg.data, atoi(client_msg.data_size)) < 0) { ERR("write"); }
     if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
-
-    //if (bulk_write(fd, data, atoi(data_size)) < 0) { ERR("send"); }
-    //if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
-
-    //if (TEMP_FAILURE_RETRY(send(fd, d, strlen(d), 0)) == -1) { ERR("send"); }
-    //if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
-
-    //fprintf(stderr, "\nGoogle response size: %li\n", resp_size);
-
-    //for (j = 0; j < resp_size; ++j) {
-    //    fprintf(stderr, "%c", resp[j]);
-    //}
-
-
-
-    /*for (int k = 0; k < strlen(d); ++k) {
-        fprintf(stderr, "%c", d[k]);
-    }*/
 
     if (bulk_write(sock, resp, resp_size) < 0) { ERR("write"); }
 
-    if (TEMP_FAILURE_RETRY(close(sock)) == -1) { ERR("close"); }
+    //if (TEMP_FAILURE_RETRY(close(sock)) == -1) { ERR("close"); }
 
     fprintf(stderr, "\nSent data\n");
-
-    //if (TEMP_FAILURE_RETRY(send(sock, data, atoi(data_size), 0)) == -1) { ERR("send"); }
-    //if (bulk_write(targ->sock, data, atoi(data_size)) < 0) { ERR("write"); }
 
     if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) { ERR("pthread_sigmask"); }
 
@@ -539,97 +513,110 @@ void manage_connections(service **services, client **clients, int *services_num,
     {
         rfds = base_rfds;
 
+        printf("PRZED PSELECT\n");
+
         if (pselect(in_socket + 1, &rfds, NULL, NULL, NULL, &old_mask) > 0)
         {
-            client_sock = add_new_client(in_socket);
-
-            if (client_sock >= 0)
+            if (FD_ISSET(in_socket, &rfds))
             {
-                /*
-                 * Odbieranie wiadomości od aplikacji klienckiej 
-                 */
-                if ((size = TEMP_FAILURE_RETRY(recv(client_sock, msg, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
-                if ((msg = realloc(msg, size)) == NULL) { ERR("realloc"); }
+                printf("PO PSELECT\n");
 
-				/*
-				 * Sprawdzanie typu wiadomości 
-				 */
-				if (atoi(&msg[0]) == 0) { cl = true; }
+                client_sock = add_new_client(in_socket);
 
-				/*
-				 * Pobieranie aktualnego czasu 
-				 */
-				if (time(&rawtime) == (time_t)-1) { ERR("time"); }
-				if ((info = localtime(&rawtime)) == NULL) { ERR("localtime"); }
-				if (asctime(info) == NULL) { ERR("asctime"); }
-				
-				/*
-				 * Dodawanie wpisu do logfile'a
-				 */
-				if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s%s has been connected\n", asctime(info), cl == true ? "client" : "admin")) < 0) { ERR("snprintf"); }
-				if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
+                fprintf(stderr, "Dodano klienta\n");
 
-
-                if ((targ = (thread_arg *) calloc(1, sizeof(thread_arg))) == NULL) { ERR("calloc"); }
-
-                /*
-                 * Prepare thread_arg structure
-                 */
-                targ->services = services;
-                targ->clients = clients;
-                targ->services_num = services_num;
-                targ->clients_num = clients_num;
-                targ->serv_mutex = serv_mutex;
-                targ->cl_mutex = cl_mutex;
-                targ->sock = &client_sock;
-                targ->msg = msg;
-                targ->msg_size = size;
-
-                //fprintf(stderr, "Client sock_fd: %d\n", client_sock);
-
-                /*
-                 * Run thread executing
-                 */
-                if (pthread_create(&thread, NULL, client_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
-                if (pthread_detach(thread) != 0) { ERR("pthread_detach"); }
-
-                //if (TEMP_FAILURE_RETRY(close(client_sock)) == -1) { ERR("close"); }
-
-                /*switch (atoi(&msg[0]))
+                if (client_sock >= 0)
                 {
-                    case 0:
-                        fprintf(stderr, "\nClient\n");
-                        //Manage client connection
-                        break;
-                    case 1:
-                        //Manage admin connection (add new service)
-                        break;
-                    case 2:
-                        //Manage admin connection (remove service)
-                        break;
-                    case 3:
-                        //Manage admin connection (add new client)
-                        break;
-                    case 4:
-                        //Manage admin connection (remove client)
-                        break;
-                    case 5:
-                        //Manage admin connection (get counters for all clients)
-                        break;
-                    case 6:
-                        break;
-                    case 7:
-                        break;
-                    case 8:
-                        //Manage admin connection (block user)
-                        break;
-                    case 9:
-                        //Manage admin connection (unblock user)
-                        break;
-                }*/
-                //if ((size = bulk_read(client_sock, msg, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
+                    /*
+                     * Odbieranie wiadomości od aplikacji klienckiej
+                     */
+                    if ((size = TEMP_FAILURE_RETRY(recv(client_sock, msg, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
+                    if ((msg = realloc(msg, size)) == NULL) { ERR("realloc"); }
 
-                //communicate(services, clients, services_num, clients_num, client_sock, serv_mutex);
+                    fprintf(stderr, "Odebrano wiadomosc\n");
+
+                    /*
+                     * Sprawdzanie typu wiadomości
+                     */
+                    if (atoi(&msg[0]) == 0) { cl = true; }
+
+                    /*
+                     * Pobieranie aktualnego czasu
+                     */
+                    if (time(&rawtime) == (time_t)-1) { ERR("time"); }
+                    if ((info = localtime(&rawtime)) == NULL) { ERR("localtime"); }
+                    if (asctime(info) == NULL) { ERR("asctime"); }
+
+                    /*
+                     * Dodawanie wpisu do logfile'a
+                     */
+                    if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s%s has been connected\n", asctime(info), cl == true ? "client" : "admin")) < 0) { ERR("snprintf"); }
+                    if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
+
+
+                    if ((targ = (thread_arg *) calloc(1, sizeof(thread_arg))) == NULL) { ERR("calloc"); }
+
+                    /*
+                     * Prepare thread_arg structure
+                     */
+                    targ->services = services;
+                    targ->clients = clients;
+                    targ->services_num = services_num;
+                    targ->clients_num = clients_num;
+                    targ->serv_mutex = serv_mutex;
+                    targ->cl_mutex = cl_mutex;
+                    targ->sock = &client_sock;
+                    targ->msg = msg;
+                    targ->msg_size = size;
+
+                    //fprintf(stderr, "Client sock_fd: %d\n", client_sock);
+
+
+                    fprintf(stderr, "Watek\n");
+                    /*
+                     * Run thread executing
+                     */
+                    if (pthread_create(&thread, NULL, client_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
+                    if (pthread_detach(thread) != 0) { ERR("pthread_detach"); }
+
+                    //if (TEMP_FAILURE_RETRY(close(client_sock)) == -1) { ERR("close"); }
+
+                    /*switch (atoi(&msg[0]))
+                    {
+                        case 0:
+                            fprintf(stderr, "\nClient\n");
+                            //Manage client connection
+                            break;
+                        case 1:
+                            //Manage admin connection (add new service)
+                            break;
+                        case 2:
+                            //Manage admin connection (remove service)
+                            break;
+                        case 3:
+                            //Manage admin connection (add new client)
+                            break;
+                        case 4:
+                            //Manage admin connection (remove client)
+                            break;
+                        case 5:
+                            //Manage admin connection (get counters for all clients)
+                            break;
+                        case 6:
+                            break;
+                        case 7:
+                            break;
+                        case 8:
+                            //Manage admin connection (block user)
+                            break;
+                        case 9:
+                            //Manage admin connection (unblock user)
+                            break;
+                    }*/
+                    //if ((size = bulk_read(client_sock, msg, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
+
+                    //communicate(services, clients, services_num, clients_num, client_sock, serv_mutex);
+                }
             }
         }
         else
