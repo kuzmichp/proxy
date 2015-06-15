@@ -14,7 +14,8 @@
 #include <signal.h>
 #include <netdb.h>
 #include <time.h>
-#include <pthread.h> 
+#include <pthread.h>
+#include <stdbool.h>
 
 #define ERR(source) (perror(source),\
 		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
@@ -98,7 +99,7 @@ ssize_t bulk_read(int fd, char *buf, size_t count);
 void manage_client_connection(char *msg, ssize_t size, service **services, client **clients, int *services_num,
                               int *clients_num, pthread_mutex_t *serv_mutex, pthread_mutex_t *cl_mutex);
 
-void *threadfunc(void *arg);
+void *client_thread_func(void *arg);
 
 struct sockaddr_in make_address(char *address, uint16_t port)
 {
@@ -193,7 +194,7 @@ int main(int argc, char *argv[])
     /*
      * Creating a log file
      */
-    if ((log_fd = TEMP_FAILURE_RETRY(open("./log", O_CREAT | O_WRONLY | O_APPEND))) == -1) { ERR("open"); }
+    if ((log_fd = TEMP_FAILURE_RETRY(open("./log.txt", O_CREAT | O_RDWR | O_APPEND, S_IRWXU | S_IRWXG | S_IRWXO))) == -1) { ERR("open"); }
 
     /*
      * Allocate memory for services and clients collections
@@ -362,14 +363,14 @@ ssize_t bulk_read(int fd, char *buf, size_t count) {
     return len;
 }
 
-void *threadfunc(void *arg)
+void *client_thread_func(void *arg)
 {
     int fd, j;
 
     thread_arg *targ = (thread_arg *) arg;
 
     char login[32];
-    char service[32];
+    char *serv;
     char *data_size;
     char data[65535];
     char msg_type;
@@ -377,12 +378,19 @@ void *threadfunc(void *arg)
     int i;
     int del_num = 0;
     int del_pos[4];
+    
+    int serv_name_length;
 
     char resp[65535];
     ssize_t resp_size;
+    
+    char host[64];
+    char port[64];
 
     int sock;
 
+    int serv_ex = 1;
+	
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -399,13 +407,35 @@ void *threadfunc(void *arg)
 
     data_size = (char *) calloc(del_pos[1] - del_pos[0] - 1, sizeof(char));
 
+	if ((serv = (char *) malloc(32 * sizeof(char))) == NULL) { ERR("malloc"); }
+
+	serv_name_length = del_pos[3] - del_pos[2] - 1;
+
 
     memcpy(&msg_type, targ->msg, sizeof(char));
     memcpy(data_size, targ->msg + del_pos[0] + 1, (del_pos[1] - del_pos[0] - 1) * sizeof(char));
     memcpy(login, targ->msg + del_pos[1] + 1, (del_pos[2] - del_pos[1] - 1) * sizeof(char));
-    memcpy(service, targ->msg + del_pos[2] + 1, (del_pos[3] - del_pos[2] - 1) * sizeof(char));
+    memcpy(serv, targ->msg + del_pos[2] + 1, (del_pos[3] - del_pos[2] - 1) * sizeof(char));
     memcpy(data, targ->msg + del_pos[3] + 1, atoi(data_size));
+    
+    if ((serv = realloc(serv, serv_name_length * sizeof(char))) == NULL) { ERR("realloc"); }
+    
+    for	(i = 0; i < *(targ->services_num); i++)
+    {
+    	if (strncmp((*(targ->services)[i]).name, serv, serv_name_length) == 0) { serv_ex = 0; }
+    }
+   
+	sock = *(targ->sock);
+    
+    if (serv_ex == 1)
+	{
+		if (bulk_write(sock, "Service doesn't exist", strlen("Service doesn't exist")) < 0) { ERR("write"); }
+		if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) { ERR("pthread_sigmask"); }
 
+		free(targ);
+		return NULL;
+	}
+	
     /*if (atoi(&msg[0]) == 0)
 {
     manage_client_connection(msg, size, services, clients, services_num, clients_num, serv_mutex, cl_mutex);
@@ -415,16 +445,23 @@ else
     //manage_admin_connection(msg, size, services, clients, services_num, clients_num, serv_mutex, cl_mutex);
 }*/
 
-
-    fprintf(stderr, "Data: %s\n", data);
+    
+    fprintf(stderr, "(int) Data: \n");
+    
+    for	(i = 0; i < atoi(data_size); i++)
+    {
+    	fprintf(stderr, "%d", (int) data[i]);
+    }
+    
+    fprintf(stderr, "\nData: %s\n", data);
 
     fd = connect_socket("google.com", 80);
 
     fprintf(stderr, "\nConnected to service\n");
 
-    char d[200] = "GET http://gooool.org/ HTTP/1.1\r\n\r\n";
+    //char d[200] = "GET http://google.com/ HTTP/1.1\r\n\r\n";
 
-    if (bulk_write(fd, d, strlen(d)) < 0) { ERR("send"); }
+    if (bulk_write(fd, data, atoi(data_size)) < 0) { ERR("write"); }
     if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
 
     //if (bulk_write(fd, data, atoi(data_size)) < 0) { ERR("send"); }
@@ -439,7 +476,7 @@ else
     //    fprintf(stderr, "%c", resp[j]);
     //}
 
-    sock = *(targ->sock);
+
 
     /*for (int k = 0; k < strlen(d); ++k) {
         fprintf(stderr, "%c", d[k]);
@@ -447,8 +484,7 @@ else
 
     if (bulk_write(sock, resp, resp_size) < 0) { ERR("write"); }
 
-    if (TEMP_FAILURE_RETRY(close(sock)) == -1)
-        ERR("close");
+    if (TEMP_FAILURE_RETRY(close(sock)) == -1) { ERR("close"); }
 
     fprintf(stderr, "\nSent data\n");
 
@@ -470,7 +506,7 @@ void manage_connections(service **services, client **clients, int *services_num,
     fd_set base_rfds, rfds;
     sigset_t mask, old_mask;
 
-    char log_rec[MAX_LOG_REC_LENGTH];
+
     time_t curr_time;
     int log_rec_size;
 
@@ -486,6 +522,18 @@ void manage_connections(service **services, client **clients, int *services_num,
 
     pthread_t thread;
     thread_arg *targ;
+    
+    /*
+     * Zmienne używane do pobrania aktualnego czasu i dodania wpisu do logfile'a 
+     */
+    time_t rawtime;
+    struct tm *info;
+    char log_rec[MAX_LOG_REC_LENGTH];
+    
+    /*
+     * Zmienna używana jest to przechowywania informacji o tym, kto się połączył do serwera proxy 
+     */
+    bool cl = false;   
 
     while (do_work)
     {
@@ -497,14 +545,30 @@ void manage_connections(service **services, client **clients, int *services_num,
 
             if (client_sock >= 0)
             {
-                //if ((curr_time = time(NULL)) == (time_t)(1)) { ERR("time"); }
-                //if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "[%ld] - Client %d was accepted\n", curr_time, client_sock)) < 0) { ERR("fprintf"); }
-                //TODO: Add information about new accepted connection to log file
-                //if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
-
-                //TODO: Create new pthread for managing connection
+                /*
+                 * Odbieranie wiadomości od aplikacji klienckiej 
+                 */
                 if ((size = TEMP_FAILURE_RETRY(recv(client_sock, msg, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
                 if ((msg = realloc(msg, size)) == NULL) { ERR("realloc"); }
+
+				/*
+				 * Sprawdzanie typu wiadomości 
+				 */
+				if (atoi(&msg[0]) == 0) { cl = true; }
+
+				/*
+				 * Pobieranie aktualnego czasu 
+				 */
+				if (time(&rawtime) == (time_t)-1) { ERR("time"); }
+				if ((info = localtime(&rawtime)) == NULL) { ERR("localtime"); }
+				if (asctime(info) == NULL) { ERR("asctime"); }
+				
+				/*
+				 * Dodawanie wpisu do logfile'a
+				 */
+				if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s%s has been connected\n", asctime(info), cl == true ? "client" : "admin")) < 0) { ERR("snprintf"); }
+				if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
+
 
                 if ((targ = (thread_arg *) calloc(1, sizeof(thread_arg))) == NULL) { ERR("calloc"); }
 
@@ -521,21 +585,15 @@ void manage_connections(service **services, client **clients, int *services_num,
                 targ->msg = msg;
                 targ->msg_size = size;
 
-                fprintf(stderr, "Client sock_fd: %d\n", client_sock);
+                //fprintf(stderr, "Client sock_fd: %d\n", client_sock);
 
                 /*
                  * Run thread executing
                  */
-                fprintf(stderr, "\nTIN\n");
-
-                if (pthread_create(&thread, NULL, threadfunc, (void *) targ) != 0) { ERR("pthread_create"); }
+                if (pthread_create(&thread, NULL, client_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
                 if (pthread_detach(thread) != 0) { ERR("pthread_detach"); }
 
-                fprintf(stderr, "\nTOUT\n");
-
                 //if (TEMP_FAILURE_RETRY(close(client_sock)) == -1) { ERR("close"); }
-
-
 
                 /*switch (atoi(&msg[0]))
                 {
