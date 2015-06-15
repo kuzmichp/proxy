@@ -47,9 +47,9 @@ typedef struct {
 } service;
 
 typedef struct {
-    char *login;
+    char login[32];
     int active;
-    char *tariff_plan;
+    char tariff_plan[32];
     double bandwidth;
     double amount;
 } client;
@@ -63,6 +63,18 @@ typedef struct {
 
 } cs_request;
 
+typedef struct {
+    service **services;
+    client **clients;
+    int *services_num;
+    int *clients_num;
+    int *sock;
+    pthread_mutex_t *serv_mutex;
+    pthread_mutex_t *cl_mutex;
+    char *msg;
+    ssize_t msg_size;
+} thread_arg;
+
 volatile sig_atomic_t do_work = 1;
 
 int sethandler(void (*f)(int), int sigNo);
@@ -71,7 +83,7 @@ int bind_tcp_socket(uint16_t port);
 
 int make_socket(void);
 
-void manage_connections(service **services, client **clients, int *services_num, int *clients_num, int socket, int log_fd, pthread_mutex_t *serv_mutex);
+void manage_connections(service **services, client **clients, int *services_num, int *clients_num, int in_socket, int log_fd, pthread_mutex_t *serv_mutex, pthread_mutex_t *cl_mutex);
 
 void usage(char *name);
 
@@ -83,13 +95,74 @@ void communicate(service **services, client **clients, int *services_num, int *c
 
 ssize_t bulk_read(int fd, char *buf, size_t count);
 
+void manage_client_connection(char *msg, ssize_t size, service **services, client **clients, int *services_num,
+                              int *clients_num, pthread_mutex_t *serv_mutex, pthread_mutex_t *cl_mutex);
+
+void *threadfunc(void *arg);
+
+struct sockaddr_in make_address(char *address, uint16_t port)
+{
+    struct sockaddr_in addr;
+    struct hostent *hostinfo;
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons (port);
+
+    hostinfo = gethostbyname(address);
+    if(hostinfo == NULL) { ERR("gethostbyname"); }
+    addr.sin_addr = *(struct in_addr*) hostinfo->h_addr;
+
+    return addr;
+}
+
+ssize_t bulk_write(int fd, char *buf, size_t count)
+{
+    int c;
+    size_t len = 0;
+
+    do
+    {
+        c = TEMP_FAILURE_RETRY(write(fd, buf, count));
+        if(c < 0)
+            return c;
+        buf += c;
+        len += c;
+        count -= c;
+    }
+    while (count > 0);
+
+    return len;
+}
+
+int connect_socket(char *name, uint16_t port){
+    struct sockaddr_in addr;
+    int socketfd;
+    socketfd = make_socket();
+    addr = make_address(name,port);
+    if(connect(socketfd,(struct sockaddr*) &addr,sizeof(struct sockaddr_in)) < 0){
+        if(errno!=EINTR) ERR("connect");
+        else {
+            fd_set wfds ;
+            int status;
+            socklen_t size = sizeof(int);
+            FD_ZERO(&wfds);
+            FD_SET(socketfd, &wfds);
+            if(TEMP_FAILURE_RETRY(select(socketfd+1,NULL,&wfds,NULL,NULL))<0) ERR("select");
+            if(getsockopt(socketfd,SOL_SOCKET,SO_ERROR,&status,&size)<0) ERR("getsockopt");
+            if(0!=status) ERR("connect");
+        }
+    }
+    return socketfd;
+}
+
 int main(int argc, char *argv[])
 {
     /*
      * in_sock will be used to communicate with clients
      * out_sock will be used to communicate with services
      */
-    int in_sock, out_sock;
+    int in_sock;
+    //int out_sock;
     int flags;
 
     /*
@@ -144,14 +217,15 @@ int main(int argc, char *argv[])
     flags = fcntl(in_sock, F_GETFL) | O_NONBLOCK;
     if (fcntl(in_sock, F_SETFL, flags) == -1) { ERR("fcntl"); }
 
-    manage_connections(&services, &clients, &services_num, &clients_num, in_sock, log_fd, &services_mutex);
+    manage_connections(&services, &clients, &services_num, &clients_num, in_sock, log_fd, &services_mutex, &clients_mutex);
 
     if (TEMP_FAILURE_RETRY(close(log_fd)) < 0) { ERR("close"); }
     if (TEMP_FAILURE_RETRY(close(in_sock)) < 0) { ERR("close"); }
 
-
     free(services);
     free(clients);
+
+    //TODO: Destroy mutexes
 
     return EXIT_SUCCESS;
 }
@@ -288,7 +362,106 @@ ssize_t bulk_read(int fd, char *buf, size_t count) {
     return len;
 }
 
-void manage_connections(service **services, client **clients, int *services_num, int *clients_num, int socket, int log_fd, pthread_mutex_t *serv_mutex)
+void *threadfunc(void *arg)
+{
+    int fd, j;
+
+    thread_arg *targ = (thread_arg *) arg;
+
+    char login[32];
+    char service[32];
+    char *data_size;
+    char data[65535];
+    char msg_type;
+
+    int i;
+    int del_num = 0;
+    int del_pos[4];
+
+    char resp[65535];
+    ssize_t resp_size;
+
+    int sock;
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+
+    if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0) { ERR("pthread_mask"); }
+
+    for (i = 0; i < targ->msg_size; ++i)
+    {
+        if (targ->msg[i] == ' ' && del_num < 4)
+        {
+            del_pos[del_num++] = i;
+        }
+    }
+
+    data_size = (char *) calloc(del_pos[1] - del_pos[0] - 1, sizeof(char));
+
+
+    memcpy(&msg_type, targ->msg, sizeof(char));
+    memcpy(data_size, targ->msg + del_pos[0] + 1, (del_pos[1] - del_pos[0] - 1) * sizeof(char));
+    memcpy(login, targ->msg + del_pos[1] + 1, (del_pos[2] - del_pos[1] - 1) * sizeof(char));
+    memcpy(service, targ->msg + del_pos[2] + 1, (del_pos[3] - del_pos[2] - 1) * sizeof(char));
+    memcpy(data, targ->msg + del_pos[3] + 1, atoi(data_size));
+
+    /*if (atoi(&msg[0]) == 0)
+{
+    manage_client_connection(msg, size, services, clients, services_num, clients_num, serv_mutex, cl_mutex);
+}
+else
+{
+    //manage_admin_connection(msg, size, services, clients, services_num, clients_num, serv_mutex, cl_mutex);
+}*/
+
+
+    fprintf(stderr, "Data: %s\n", data);
+
+    fd = connect_socket("google.com", 80);
+
+    fprintf(stderr, "\nConnected to service\n");
+
+    char d[200] = "GET http://gooool.org/ HTTP/1.1\r\n\r\n";
+
+    if (bulk_write(fd, d, strlen(d)) < 0) { ERR("send"); }
+    if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
+
+    //if (bulk_write(fd, data, atoi(data_size)) < 0) { ERR("send"); }
+    //if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
+
+    //if (TEMP_FAILURE_RETRY(send(fd, d, strlen(d), 0)) == -1) { ERR("send"); }
+    //if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
+
+    //fprintf(stderr, "\nGoogle response size: %li\n", resp_size);
+
+    //for (j = 0; j < resp_size; ++j) {
+    //    fprintf(stderr, "%c", resp[j]);
+    //}
+
+    sock = *(targ->sock);
+
+    /*for (int k = 0; k < strlen(d); ++k) {
+        fprintf(stderr, "%c", d[k]);
+    }*/
+
+    if (bulk_write(sock, resp, resp_size) < 0) { ERR("write"); }
+
+    if (TEMP_FAILURE_RETRY(close(sock)) == -1)
+        ERR("close");
+
+    fprintf(stderr, "\nSent data\n");
+
+    //if (TEMP_FAILURE_RETRY(send(sock, data, atoi(data_size), 0)) == -1) { ERR("send"); }
+    //if (bulk_write(targ->sock, data, atoi(data_size)) < 0) { ERR("write"); }
+
+    if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) { ERR("pthread_sigmask"); }
+
+    free(targ);
+    return NULL;
+}
+
+void manage_connections(service **services, client **clients, int *services_num, int *clients_num, int in_socket, int log_fd, pthread_mutex_t *serv_mutex, pthread_mutex_t *cl_mutex)
 {
     int i;
 
@@ -305,45 +478,69 @@ void manage_connections(service **services, client **clients, int *services_num,
     ssize_t size;
 
     FD_ZERO(&base_rfds);
-    FD_SET(socket, &base_rfds);
+    FD_SET(in_socket, &base_rfds);
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
     sigprocmask(SIG_BLOCK, &mask, &old_mask);
 
+    pthread_t thread;
+    thread_arg *targ;
+
     while (do_work)
     {
         rfds = base_rfds;
 
-        if (pselect(socket + 1, &rfds, NULL, NULL, NULL, &old_mask) > 0)
+        if (pselect(in_socket + 1, &rfds, NULL, NULL, NULL, &old_mask) > 0)
         {
-            client_sock = add_new_client(socket);
+            client_sock = add_new_client(in_socket);
 
             if (client_sock >= 0)
             {
-                /*
                 //if ((curr_time = time(NULL)) == (time_t)(1)) { ERR("time"); }
                 //if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "[%ld] - Client %d was accepted\n", curr_time, client_sock)) < 0) { ERR("fprintf"); }
                 //TODO: Add information about new accepted connection to log file
                 //if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
 
                 //TODO: Create new pthread for managing connection
-                fprintf(stderr, "Before reading data\n");*/
                 if ((size = TEMP_FAILURE_RETRY(recv(client_sock, msg, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
                 if ((msg = realloc(msg, size)) == NULL) { ERR("realloc"); }
 
-                fprintf(stderr, "Message:\n");
+                if ((targ = (thread_arg *) calloc(1, sizeof(thread_arg))) == NULL) { ERR("calloc"); }
 
-                for (i = 0; i < size; ++i)
-                {
-                    fprintf(stderr, "%d", (int) msg[i]);
-                }
+                /*
+                 * Prepare thread_arg structure
+                 */
+                targ->services = services;
+                targ->clients = clients;
+                targ->services_num = services_num;
+                targ->clients_num = clients_num;
+                targ->serv_mutex = serv_mutex;
+                targ->cl_mutex = cl_mutex;
+                targ->sock = &client_sock;
+                targ->msg = msg;
+                targ->msg_size = size;
 
-                fprintf(stderr, "\n");
+                fprintf(stderr, "Client sock_fd: %d\n", client_sock);
 
-                switch (atoi(&msg[0]))
+                /*
+                 * Run thread executing
+                 */
+                fprintf(stderr, "\nTIN\n");
+
+                if (pthread_create(&thread, NULL, threadfunc, (void *) targ) != 0) { ERR("pthread_create"); }
+                if (pthread_detach(thread) != 0) { ERR("pthread_detach"); }
+
+                fprintf(stderr, "\nTOUT\n");
+
+                //if (TEMP_FAILURE_RETRY(close(client_sock)) == -1) { ERR("close"); }
+
+
+
+                /*switch (atoi(&msg[0]))
                 {
                     case 0:
+                        fprintf(stderr, "\nClient\n");
                         //Manage client connection
                         break;
                     case 1:
@@ -371,7 +568,7 @@ void manage_connections(service **services, client **clients, int *services_num,
                     case 9:
                         //Manage admin connection (unblock user)
                         break;
-                }
+                }*/
                 //if ((size = bulk_read(client_sock, msg, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
 
                 //communicate(services, clients, services_num, clients_num, client_sock, serv_mutex);
@@ -385,6 +582,13 @@ void manage_connections(service **services, client **clients, int *services_num,
     }
 
     sigprocmask(SIG_UNBLOCK, &mask, NULL);
+}
+
+void manage_client_connection(char *msg, ssize_t size, service **services, client **clients, int *services_num,
+                              int *clients_num, pthread_mutex_t *serv_mutex, pthread_mutex_t *cl_mutex)
+{
+
+
 }
 
 int add_new_client(int socket) {

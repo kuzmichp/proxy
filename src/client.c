@@ -98,6 +98,7 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
 			if (FD_ISSET(in_sock, &rfds))
 			{
 				app_sock = add_new_client(in_sock);
+
      	    	if (app_sock >= 0)
                 {
                     /*
@@ -106,7 +107,6 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
                     if ((*in_size = TEMP_FAILURE_RETRY(recv(app_sock, in_data, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
 
                     /*
-                     * Not used because of unknown incoming data size
                      * if ((*in_size = bulk_read(app_sock, in_data, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
                      */
 
@@ -120,12 +120,13 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
                      * Sending data to proxy server
                      * Broken PIPE is treated as critical error here
                      */
-                    if (bulk_write(out_sock, msg, msg_size) < 0) { ERR("write"); }
+                    if (TEMP_FAILURE_RETRY(send(out_sock, msg, msg_size, 0)) < 0) { ERR("send"); }
                     if ((resp_size = bulk_read(out_sock, resp, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
 
-                    fprintf(stderr, "Response from server\n");
+                    fprintf(stderr, "Response from server: %li\n", resp_size);
 
-                    for (i = 0; i < resp_size; ++i) {
+                    for (i = 0; i < resp_size; ++i)
+                    {
                         fprintf(stderr, "%c", resp[i]);
                     }
 
@@ -186,8 +187,7 @@ void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_d
     /*
      * TYPE SIZE_OF_DATA LOGIN SERVICE DATA
      */
-    //TODO: Check return value
-    snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, login, service, in_data);
+    if (snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, login, service, in_data) < 0) { ERR("snprintf"); }
 }
 
 int main(int argc, char *argv[])
@@ -292,7 +292,6 @@ ssize_t bulk_read(int fd, char *buf, size_t count)
 	do
 	{
 		c = TEMP_FAILURE_RETRY(read(fd, buf, count));
-		fprintf(stderr, "%d", c);
 		if (c < 0)
 			return c;
 		if (c == 0)
