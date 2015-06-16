@@ -96,27 +96,26 @@ void get_in_data(int in_sock, char *domain, int port, char *in_data, int *in_siz
                     /*
                      * Przygotowanie wiadomosci dla serwera proxy
                      */
-                    msg = (char *) malloc(sizeof(char));
+                    if ((msg = (char *) malloc(sizeof(char))) == NULL) { ERR("malloc"); };
                     prepare_message(&msg, &msg_size, cl_info, in_data, *in_size);
 
                     /*
                      * Nawiazywanie polaczenia z serwerem proxy
                      */
-                    fprintf(stderr, "Domain: %s\n", domain);
                     out_sock = connect_socket(domain, port);
 
                     /*
                      * Wysylanie danych do serwera proxy
                      */
                     if (TEMP_FAILURE_RETRY(send(out_sock, msg, msg_size, 0)) < 0) { ERR("send"); }
+                    fprintf(stderr, "Wyslano wiadomosc do serwera proxy\n");
 
+                    free(msg);
                     /*
                      * Czekanie na odpowiedz od serwera proxy
                      */
                     if ((resp_size = TEMP_FAILURE_RETRY(recv(out_sock, resp, MAX_IN_DATA_LENGTH, MSG_WAITALL))) < 0) { ERR("read"); }
-
-                    fprintf(stderr, "Response from server: %li\n", resp_size);
-                    fprintf(stderr, "%s\n", resp);
+                    fprintf(stderr, "Otrzymano odpowiedz od serwera proxy:\n%s", resp);
 
 					if (TEMP_FAILURE_RETRY(close(app_sock)) < 0) { ERR("close"); }
                     if (TEMP_FAILURE_RETRY(close(out_sock)) < 0) { ERR("close"); }
@@ -172,7 +171,7 @@ int main(int argc, char *argv[])
 	if (sethandler(sigint_handler, SIGINT)) { ERR("Setting SIGINT"); }
 
     /*
-     * ... z aplikacja
+     * Nasluchiwanie na polaczenie od aplikacji
      */
     in_sock = bind_tcp_socket(atoi(argv[5]));
     flags = fcntl(in_sock, F_GETFL) | O_NONBLOCK;
@@ -187,5 +186,6 @@ int main(int argc, char *argv[])
 
     if (TEMP_FAILURE_RETRY(close(in_sock)) < 0) { ERR("close:"); }
 
+    free(in_data);
     return EXIT_SUCCESS;
 }

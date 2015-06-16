@@ -2,9 +2,6 @@
 
 #include "header.h"
 
-#define MAX_MENU_OPT_SIZE 5
-#define MAX_CMD_SIZE 64
-
 volatile sig_atomic_t do_work = 1;
 
 void sigint_handler(int sig)
@@ -26,7 +23,7 @@ int main(int argc, char *argv[])
     char *menu_item;
 
     char *cmd;
-    size_t max_cmd_size = 64;
+    size_t max_cmd_size = MAX_CMD_SIZE;
     ssize_t cmd_size;
 
     char *msg;
@@ -79,7 +76,7 @@ int main(int argc, char *argv[])
         /*
          * Alokacja pamieci dla wprowadzonych danych
          */
-        if ((cmd = (char *) malloc((MAX_CMD_SIZE) * sizeof(char))) == NULL) { ERR("calloc"); }
+        if ((cmd = (char *) malloc((MAX_CMD_SIZE) * sizeof(char))) == NULL) { ERR("malloc"); }
 
         /*
          * Wielki if else
@@ -111,7 +108,10 @@ int main(int argc, char *argv[])
 
             if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
         }
-        else if (msg_type == '5') { }
+        else if (msg_type == '5')
+        {
+            cmd_size = 1;
+        }
         else if (msg_type == '6')
         {
             printf("Podaj login uzytkownika, ktorego chcesz zablokowac: ");
@@ -146,22 +146,20 @@ int main(int argc, char *argv[])
         /*
          * Dodawanie typu wiadomosci (dodaje byte zerowy na koncu)
          */
-        fprintf(stderr, "Wiadomosc: %s\n", cmd);
-
         if (snprintf(msg, cmd_size + 3, "%c %s", msg_type, cmd) < 0) { ERR("sprintf"); }
 
         /*
          * Wysylanie wiadomosci
          */
         if (bulk_write(socket, msg, cmd_size + 3) < 0) { ERR("write"); }
+        fprintf(stderr, "Wyslano wiadomosc do serwera proxy\n");
 
         /*
          * Odbieranie odpowiedzi
          */
         if ((resp = (char *) malloc(MAX_RESP_SIZE * sizeof(char))) == NULL) { ERR("malloc"); }
         if ((resp_size = bulk_read(socket, resp, MAX_RESP_SIZE)) < 0) { ERR("read"); }
-
-        fprintf(stderr, "%s\n", resp);
+        fprintf(stderr, "Otrzymano odpowiedz od serwera proxy: %s\n", resp);
 
         free(msg);
         free(cmd);

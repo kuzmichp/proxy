@@ -22,12 +22,8 @@ int check_service(char name[], service **services, int *serv_num, char **addr, i
 {
     int i;
 
-    fprintf(stderr, "Nazwa: %s\nLiczba uslug: %d\n", name, *serv_num);
-
     for (i = 0; i < *serv_num; ++i)
     {
-        fprintf(stderr, "Nazwa z listy: %s\n", (*services)[i].name);
-
         if (strncmp((*services)[i].name, name, strlen(name)) == 0)
         {
             if ((*addr = realloc(*addr, sizeof(char) * strlen((*services)[i].host))) == NULL) { ERR("realloc"); }
@@ -42,10 +38,25 @@ int check_service(char name[], service **services, int *serv_num, char **addr, i
     return 1;
 }
 
+/*
+ * Funkcja sluzy do zmiany liczby przeslanych bytow przez klienta
+ */
+/*void change_sent_data_size(client **clients, int *cl_num, char login[], int transfer)
+{
+    int i;
+
+    for (i = 0; i < *cl_num; ++i)
+    {
+        if (strncmp((*clients)[i].login, login, strlen(login)) == 0)
+        {
+            (*clients)[i].bytes_num = 0;
+            (*clients)[i].bytes_num += transfer;
+        }
+    }
+}*/
+
 void *client_thread_func(void *arg)
 {
-    fprintf(stderr, "Cos przyszlo od klienta\n");
-
     int fd;
 
     thread_arg *targ = (thread_arg *) arg;
@@ -54,10 +65,9 @@ void *client_thread_func(void *arg)
     int del_num = 0;
     int del_pos[4];
 
-    char resp[65535];
+    char resp[MAX_IN_DATA_LENGTH];
     ssize_t resp_size;
 
-    //int serv_ex = 1;
     char *addr;
     int port;
 
@@ -72,11 +82,15 @@ void *client_thread_func(void *arg)
      */
     cl_msg client_msg;
 
-
     /*
      * Istnienie uslugi
      */
     int res;
+
+    /*
+     * Transfer
+     */
+    //int transfer = 0;
 
     if (sscanf(targ->msg, "%c %s %s %s %s", &client_msg.type, client_msg.data_size, client_msg.login, client_msg.serv_name, client_msg.data) != 5) { ERR("sscanf"); }
 
@@ -97,8 +111,6 @@ void *client_thread_func(void *arg)
     /*
      * Sprawdzanie, czy rzadany serwis istnieje
      */
-    fprintf(stderr, "Liczba uslug przep wywolaniem: %d", *(targ->services_num));
-
     if ((addr = (char *) malloc(sizeof(char))) == NULL) { ERR("malloc"); }
     pthread_mutex_lock(targ->serv_mutex);
     res = check_service(client_msg.serv_name, targ->services, targ->services_num, &addr, &port);
@@ -111,6 +123,7 @@ void *client_thread_func(void *arg)
 
         if (TEMP_FAILURE_RETRY(close(*(targ->sock))) == -1) { ERR("close"); }
 
+        free(addr);
         free(targ);
         return NULL;
     }
@@ -120,7 +133,14 @@ void *client_thread_func(void *arg)
     fd = connect_socket(addr, port);
 
     if (bulk_write(fd, client_msg.data, atoi(client_msg.data_size)) < 0) { ERR("write"); }
-    if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, 65535 * sizeof(char), 0))) == -1) { ERR("recv"); }
+    //transfer = atoi(client_msg.data_size);
+
+    if ((resp_size = TEMP_FAILURE_RETRY(recv(fd, resp, MAX_IN_DATA_LENGTH * sizeof(char), 0))) == -1) { ERR("recv"); }
+    //transfer += resp_size;
+
+    //pthread_mutex_lock(targ->cl_mutex);
+    //change_sent_data_size(targ->clients, targ->clients_num, client_msg.login, transfer);
+    //pthread_mutex_unlock(targ->cl_mutex);
 
     if (bulk_write(*(targ->sock), resp, resp_size) < 0) { ERR("write"); }
 
@@ -136,7 +156,7 @@ void *client_thread_func(void *arg)
 
 void *admin_thread_func(void *arg)
 {
-    fprintf(stderr, "Cos przyszlo od admina\n");
+    //int i;
 
     thread_arg *targ = (thread_arg *) arg;
 
@@ -159,43 +179,46 @@ void *admin_thread_func(void *arg)
     service serv;
     client cl;
 
-    char s_name[64];
-    char s_host[64];
-    int s_port;
+    char s_name[MAX_SERV_NAME_LENGTH];
+    char s_host[MAX_HOST_LENGTH];
+    char s_port[MAX_PORT_SIZE];
 
     char cl_login[MAX_LOGIN_LENGTH];
-    char plan[32];
+    char plan[MAX_TARIFF_PLAN_LENGTH];
 
     /*
      * Odpowiedz do admina
      */
     char *resp;
-    //int resp_size;
+    int resp_size;
 
-    /* Dodawanie nowego serwisu */
+    /*
+     * Dodawanie nowego serwisu
+     */
     if (msg_type == '1')
     {
-        //if (sscanf(msg, "%s %s %s %d", &msg_type, serv.s_name, serv.s_host, &(serv.s_port)) != 4) { ERR("sscanf"); }
-        if (sscanf(msg, "%c %s %s %d", &msg_type, s_name, s_host, &s_port) != 4) { ERR("sscanf"); }
+        if (sscanf(msg, "%c %s %s %s", &msg_type, s_name, s_host, s_port) != 4) { ERR("sscanf"); }
 
         pthread_mutex_lock(s_mutex);
 
         (*serv_num) += 1;
         if ((*services = realloc(*services, (*serv_num) * sizeof(service))) == NULL) { ERR("realloc"); }
 
-        memcpy(&(serv.name), s_name, strlen(s_name));
-        memcpy(&(serv.host), s_host, strlen(s_host));
-        serv.port = s_port;
+        memcpy(&(serv.name), s_name, strlen(s_name) + 1);
+        (serv.name)[strlen(s_name)] = '\0';
+        memcpy(&(serv.host), s_host, strlen(s_host) + 1);
+        (serv.host)[strlen(s_host)] = '\0';
+        serv.port = atoi(s_port);
 
         (*services)[(*serv_num) - 1] = serv;
 
         pthread_mutex_unlock(s_mutex);
 
         if ((resp = (char *) malloc(MAX_RESP_SIZE * sizeof(char))) == NULL) { ERR("malloc"); }
-        //TODO: htonl
-        //if ((resp_size = sprintf(resp, "Dodano nowy serwis: %s %s %d", serv.name, serv.host, serv.port)) < 0) { ERR("sprintf"); };
+        if ((resp_size = sprintf(resp, "Dodano nowa usluge: %s %s", serv.name, serv.host)) < 0) { ERR("sprintf"); };
+        fprintf(stderr, "Dodano nowa usluge: %s\n", serv.name);
 
-        //if (bulk_write(*(targ->sock), resp, resp_size) < 0) { ERR("write"); }
+        if (bulk_write(*(targ->sock), resp, resp_size) < 0) { ERR("write"); }
     }
     /* Usuwanie serwisu */
     else if (msg_type == '2')
@@ -213,19 +236,20 @@ void *admin_thread_func(void *arg)
 
         if ((*clients = realloc(*clients, (*cl_num) * sizeof(client))) == NULL) { ERR("realloc"); }
 
-        memcpy(&(cl.login), cl_login, strlen(cl_login));
-        memcpy(&(cl.tariff_plan), plan, strlen(plan));
+        memcpy(&(cl.login), cl_login, strlen(cl_login) + 1);
+        (cl.login)[strlen(cl_login)] = '\0';
+        memcpy(&(cl.tariff_plan), plan, strlen(plan) + 1);
+        (cl.tariff_plan)[strlen(plan)] = '\0';
 
         (*clients)[(*cl_num) - 1] = cl;
 
         pthread_mutex_unlock(cl_mutex);
 
         if ((resp = (char *) malloc(MAX_RESP_SIZE * sizeof(char))) == NULL) { ERR("malloc"); }
+        if ((resp_size = sprintf(resp, "Dodano nowego klienta: %s %d %s %f %f", cl.login, cl.active, cl.tariff_plan, cl.bandwidth, cl.amount)) < 0) { ERR("sprintf"); };
+        fprintf(stderr, "Dodano nowego klienta: %s\n", cl.login);
 
-        //TODO: htonl
-        //if ((resp_size = sprintf(resp, "Dodano nowego klienta: %s %d %s %f %f", cl.login, cl.active, cl.tariff_plan, cl.bandwidth, cl.amount)) < 0) { ERR("sprintf"); };
-
-        //if (bulk_write(*(targ->sock), resp, resp_size) < 0) { ERR("write"); }
+        if (bulk_write(*(targ->sock), resp, resp_size) < 0) { ERR("write"); }
     }
     /* Usuwanie klienta */
     else if (msg_type == '4')
@@ -235,7 +259,15 @@ void *admin_thread_func(void *arg)
     /* Pobieranie wartosci licznikow */
     else if (msg_type == '5')
     {
+        /*for (i = 0; i < *(targ->clients_num); ++i)
+        {
+            fprintf(stderr, "Licznik: %d\n", (*clients)[i].bytes_num);
 
+            if ((resp = (char *) malloc(MAX_RESP_SIZE * sizeof(char))) == NULL) { ERR("malloc"); }
+            if ((resp_size = sprintf(resp, "%s - %d", (*clients)[i].login, (*clients)[i].bytes_num)) < 0) { ERR("sprintf"); };
+
+            if (bulk_write(*(targ->sock), resp, resp_size) < 0) { ERR("write"); }
+        }*/
     }
     /* Blokowanie uzytkownika */
     else if (msg_type == '6')
@@ -315,18 +347,14 @@ void manage_connections(service **services, client **clients, int *services_num,
                     if ((msg = (char *) malloc(MAX_IN_DATA_LENGTH)) == NULL) { ERR("malloc"); }
                     if ((size = TEMP_FAILURE_RETRY(recv(client_sock, msg, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
 
-                    fprintf(stderr, "Realloc + size: %li\n", size);
-
                     if ((msg = realloc(msg, size)) == NULL) { ERR("realloc"); }
-
-                    fprintf(stderr, "Po realloc'u\n");
 
                     /*
                      * Sprawdzanie typu wiadomości
                      */
-                    fprintf(stderr, "TYPE: %d\n", atoi(&msg[0]));
-
                     if (atoi(&msg[0]) == 0) { cl = 0; }
+
+                    fprintf(stderr, "\nOdebrano wiadomosc od %s: %s\n", cl == 0 ? "klienta" : "admina", msg);
 
                     /*
                      * Pobieranie aktualnego czasu
@@ -338,8 +366,9 @@ void manage_connections(service **services, client **clients, int *services_num,
                     /*
                      * Dodawanie wpisu do logfile'a
                      */
-                    if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s%s has been connected.n", asctime(info), cl == 0 ? "client" : "admin")) < 0) { ERR("snprintf"); }
+                    if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s Polaczono z %s\n", asctime(info), cl == 0 ? "klientem" : "adminem")) < 0) { ERR("snprintf"); }
                     if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
+                    fprintf(stderr, "Dodano wpis do logfile'a\n");
 
                     if ((targ = (thread_arg *) calloc(1, sizeof(thread_arg))) == NULL) { ERR("calloc"); }
 
@@ -361,12 +390,10 @@ void manage_connections(service **services, client **clients, int *services_num,
                      */
                     if (cl == 0)
                     {
-                        fprintf(stderr, "Watek klienta\n");
                         if (pthread_create(&thread, NULL, client_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
                     }
                     else
                     {
-                        fprintf(stderr, "Watek admina\n");
                         if (pthread_create(&thread, NULL, admin_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
                     }
 
@@ -386,14 +413,10 @@ void manage_connections(service **services, client **clients, int *services_num,
 
 int main(int argc, char *argv[])
 {
-    int i;
-
     /*
-     * in_sock will be used to communicate with clients
-     * out_sock will be used to communicate with services
+     * in_sock jest uzywany do komunikacji z klientami
      */
     int in_sock;
-    //int out_sock;
     int flags;
 
     /*
@@ -402,16 +425,13 @@ int main(int argc, char *argv[])
     int log_fd;
 
     /*
-     * Collections for storing informations about services and clients
+     * Kolekcje do przechowywania uslug i klientow
      */
     service *services;
     client *clients;
 
     int services_num = 0, clients_num = 0;
 
-    /*
-     * Mutexes prove synchronization during operations on services and clients collections
-     */
     pthread_mutex_t services_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -421,28 +441,19 @@ int main(int argc, char *argv[])
      */
     if (argc != 2) { usage(argv[0]); }
 
-    /*
-     * Creating a log file
-     */
     if ((log_fd = TEMP_FAILURE_RETRY(open("./log.txt", O_CREAT | O_RDWR | O_APPEND, S_IRWXU | S_IRWXG | S_IRWXO))) == -1) { ERR("open"); }
 
-    /*
-     * Allocate memory for services and clients collections
-     */
     services = (service *) malloc(services_num * sizeof(service));
     if (services == NULL) { ERR("malloc"); }
 
     clients = (client *) malloc(clients_num * sizeof(client));
     if (clients == NULL) { ERR("malloc"); }
 
-    /*
-     * Setting sig handlers
-     */
     sethandler(SIG_IGN, SIGPIPE);
     sethandler(siginthandler, SIGINT);
 
     /*
-     * Bind socket and start listening to incoming connection (from client)
+     * Nasluchiwanie na polaczenia od klientow
      */
     in_sock = bind_tcp_socket(atoi(argv[1]));
     flags = fcntl(in_sock, F_GETFL) | O_NONBLOCK;
@@ -455,26 +466,6 @@ int main(int argc, char *argv[])
 
     free(services);
     free(clients);
-
-    for (i = 0; i < strlen(services[0].name) + 1; ++i) {
-        fprintf(stderr, "%d", (int) (services[0].name)[i]);
-    }
-
-    fprintf(stderr, "\nSerwisy:\n");
-    for (i = 0; i < services_num; ++i)
-    {
-        fprintf(stderr, "%s %s %d", services[i].name, services[i].host, services[i].port);
-        fprintf(stderr, "\n");
-    }
-
-    fprintf(stderr, "\nKlienci:\n");
-    for (i = 0; i < clients_num; ++i)
-    {
-        fprintf(stderr, "%s %d %s %f %f", clients[i].login, clients[i].active, clients[i].tariff_plan, clients[i].bandwidth, clients[i].amount);
-        fprintf(stderr, "\n");
-    }
-
-    //TODO: Destroy mutexes
 
     return EXIT_SUCCESS;
 }

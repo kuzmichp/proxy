@@ -29,35 +29,41 @@
 #define MAX_IN_DATA_LENGTH 65535
 #define MAX_LOGIN_LENGTH 64
 #define MAX_SERV_NAME_LENGTH 64
-#define MAX_INT_DIGITS_NUM 32
-#define DELIMITERS_NUM 4
-
+#define MAX_HOST_LENGTH 64
 #define MAX_LOG_REC_LENGTH 64
-#define MAX_IN_DATA_LENGTH 65535
+#define MAX_INT_DIGITS_NUM 32
+#define MAX_TARIFF_PLAN_LENGTH 32
 
+#define DELIMITERS_NUM 4
 #define MAX_RESP_SIZE 128
+
+#define MAX_MENU_OPT_SIZE 5
+#define MAX_CMD_SIZE 64
+
+#define MAX_PORT_SIZE 16
 
 typedef struct 
 {
-    char name[64];
-    char host[64];
+    char name[MAX_SERV_NAME_LENGTH];
+    char host[MAX_HOST_LENGTH];
     int port;
 } service;
 
 typedef struct
 {
-    char login[64];
+    char login[MAX_LOGIN_LENGTH];
     int active;
-    char tariff_plan[64];
+    char tariff_plan[MAX_TARIFF_PLAN_LENGTH];
     double bandwidth;
     double amount;
+    int bytes_num;
 } client;
 
 typedef struct
 {
     int opt;
-    char service[64];
-    char host[64];
+    char service[MAX_SERV_NAME_LENGTH];
+    char host[MAX_HOST_LENGTH];
     int port;
 } cs_request;
 
@@ -77,10 +83,10 @@ typedef struct
 typedef struct
 {
     char type;
-    char data_size[32];
-    char login[64];
-    char serv_name[64];
-    char data[65535];
+    char data_size[MAX_INT_DIGITS_NUM];
+    char login[MAX_LOGIN_LENGTH];
+    char serv_name[MAX_SERV_NAME_LENGTH];
+    char data[MAX_IN_DATA_LENGTH];
 } cl_msg;
 
 typedef struct 
@@ -173,9 +179,11 @@ int connect_socket(char *name, uint16_t port)
     int socketfd;
     socketfd = make_socket();
     addr = make_address(name,port);
-    if(connect(socketfd,(struct sockaddr*) &addr,sizeof(struct sockaddr_in)) < 0){
+    if(connect(socketfd,(struct sockaddr*) &addr,sizeof(struct sockaddr_in)) < 0)
+    {
         if(errno!=EINTR) ERR("connect");
-        else {
+        else
+        {
             fd_set wfds ;
             int status;
             socklen_t size = sizeof(int);
