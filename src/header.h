@@ -1,3 +1,5 @@
+/* header.h */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +20,9 @@
 
 #define ERR(source) (perror(source),\
 		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
+		     exit(EXIT_FAILURE))
+
+#define HERR(source) (fprintf(stderr,"%s(%d) at %s:%d\n",source,h_errno,__FILE__,__LINE__),\
 		     exit(EXIT_FAILURE))
 
 #define BACKLOG 3

@@ -1,204 +1,157 @@
 /* admin.c */
 
-#define _GNU_SOURCE
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <netdb.h>
-#include <time.h>
-
-#define ERR(source) (perror(source),\
-		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
-		     exit(EXIT_FAILURE))
-
-#define HERR(source) (fprintf(stderr,"%s(%d) at %s:%d\n",source,h_errno,__FILE__,__LINE__),\
-		     exit(EXIT_FAILURE))
+#include "header.h"
 
 #define MAX_MENU_OPT_SIZE 5
 #define MAX_CMD_SIZE 64
 
-struct sockaddr_in make_address(char *name, uint16_t port);
+volatile sig_atomic_t do_work = 1;
 
-void usage(char *name);
-
-struct sockaddr_in make_address(char *address, uint16_t port) {
-    struct sockaddr_in addr;
-    struct hostent *hostinfo;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    hostinfo = gethostbyname(address);
-    if (hostinfo == NULL)
-        HERR("gethostbyname");
-
-    addr.sin_addr = *(struct in_addr*) hostinfo->h_addr;
-
-    return addr;
+void sigint_handler(int sig)
+{
+    do_work = 0;
 }
 
-int sethandler(void (*f)(int), int sigNo);
+void usage(char *name)
+{
+    fprintf(stderr, "USAGE: %s [proxy server address] [proxy server port]\n", name);
+    exit(EXIT_FAILURE);
+}
 
-int connect_socket(char *name, uint16_t port);
-
-void communicate(int socket);
-
-int make_socket();
-
-ssize_t bulk_write(int fd, char *buf, size_t count);
-
-int main(int argc, char *argv[]) {
-    /* Menu item */
+int main(int argc, char *argv[])
+{
+    /*
+     * Pozycja menu
+     */
     char *menu_item;
 
-    /* Message size for proxy */
     char *cmd;
     size_t max_cmd_size = 64;
     ssize_t cmd_size;
 
     char *msg;
 
-    /* FDs (sockets) */
     int socket;
 
-    /* Check if not exit */
-    bool is_working = true;
+    int is_working = 0;
 
-    /* ./admin [server address] [server port] */
-    if (argc != 3) {
+    char msg_type;
+
+    /*
+     * ./admin [server address] [server port]
+     */
+    if (argc != 3)
+    {
         usage(argv[0]);
     }
 
     sethandler(SIG_IGN, SIGPIPE);
-
-    printf("*** admin ***\n");
+    if (sethandler(sigint_handler, SIGINT)) { ERR("Setting SIGINT"); }
 
     /* Manage user input */
-    while (is_working == true) {
+    while (is_working == 0 && do_work)
+    {
         printf("\nMenu:\n"
-                       "\n[1] - Add new service\n"
-                       "[2] - Remove existing service\n"
-                       "[3] - Add new client\n"
+                       "\n[1] - Dodaj nowy serwis\n"
+                       "[2] - Usun istniejacy serwis\n"
+                       "[3] - Dodaj nowego klienta\n"
+                       "[4] - Usun istniejacego klietna\n"
+                       "[5] - Pobranie wartosci licznikow dla klientow\n"
+                       "[6] - Zablokuj uzytkownika\n"
+                       "[7] - Odblokuj uzytkownika\n"
                        "[...] - Exit\n");
-        printf("\nYour choise: ");
+        printf("\nWybor: ");
 
-        menu_item = (char *) malloc((MAX_MENU_OPT_SIZE + 1) * sizeof(char));
-
-        if (menu_item == NULL) { ERR("malloc"); }
+        /*
+         * Pobieranie opcji wprowadzonej przez administratora
+         */
+        if ((menu_item = (char *) malloc((MAX_MENU_OPT_SIZE + 1) * sizeof(char))) == NULL) { ERR("malloc"); }
         if ((fgets(menu_item, MAX_MENU_OPT_SIZE, stdin)) == NULL) { ERR("fgetc"); }
 
-        /* Manage all menu items */
-        if (strncmp(menu_item, "1", 1) == 0) {
-            printf("Enter service [name] [host] [port]: ");
+        msg_type = menu_item[0];
 
-            /* Allocate memory for the user command */
-            cmd = (char *) malloc((MAX_CMD_SIZE + 1) * sizeof(char));
-            if (cmd == NULL) { ERR("calloc"); }
+        /*
+         * Alokacja pamieci dla wprowadzonych danych
+         */
+        if ((cmd = (char *) malloc((MAX_CMD_SIZE) * sizeof(char))) == NULL) { ERR("calloc"); }
+
+        /*
+         * Wielki if else
+         */
+        if (msg_type == '1')
+        {
+            printf("Podaj dane serwisu, ktory chcesz dodac - [nazwa] [host] [port]: ");
+
+            /*
+             * Pobieranie danych
+             */
+            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
+        }
+        else if (msg_type == '2')
+        {
+            printf("Podaj nazwe serwisu, ktory chcesz usunac: ");
 
             if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-
-            if ((cmd = realloc(cmd, cmd_size)) == NULL) { ERR("realloc"); }
-
-            socket = connect_socket(argv[1], atoi(argv[2]));
-
-            /* Add message type */
-            msg = (char *) malloc((cmd_size + 2) * sizeof(char));
-            if (msg == NULL) { ERR("malloc"); }
-
-            if (sprintf(msg, "1 %s", cmd) < 0) { ERR("sprintf"); }
-
-            if (bulk_write(socket, msg, cmd_size + 2) < 0) { ERR("write"); }
-
-            free((void *)msg);
-            free((void *)cmd);
-
-            if (TEMP_FAILURE_RETRY(close(socket)) < 0) { ERR("close"); }
-
-            //TODO: Close socket
-            //printf("\nData: %s\nSize: %li\n", msg, msg_size);
-        } else {
-            printf("Invalid option\n");
-            is_working = false;
         }
+        else if (msg_type == '3')
+        {
+            printf("Podaj dane uzytkownika, ktorego chcesz dodac - [login] [aktywny] [plan taryfowy] [przepustowosc] [kwota]: ");
+
+            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
+        }
+        else if (msg_type == '4')
+        {
+            printf("Podaj login uzytkownika, ktorego chcesz usunac: ");
+
+            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
+        }
+        else if (msg_type == '5') { }
+        else if (msg_type == '6')
+        {
+            printf("Podaj login uzytkownika, ktorego chcesz zablokowac: ");
+
+            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
+        }
+        else if (msg_type == '7')
+        {
+            printf("Podaj login uzytkownika, ktorego chcesz odblokowac: ");
+
+            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
+        }
+        else
+        {
+            printf("Bledny wybor\n");
+            is_working = 1;
+        }
+
+        if ((cmd = realloc(cmd, cmd_size * sizeof(char))) == NULL) { ERR("realloc"); }
+
+        /*
+         * Laczenie sie z serwerem proxy
+         */
+        socket = connect_socket(argv[1], atoi(argv[2]));
+
+        /*
+         * Alokacja pamieci na wiadomosc (TYP_WIADOMOSCI DANE)
+         * 3 = TYP + SPACJA + BYTE ZEROWY
+         */
+        if ((msg = (char *) malloc((cmd_size + 3) * sizeof(char))) == NULL) { ERR("malloc"); }
+
+        /*
+         * Dodawanie typu wiadomosci (dodaje byte zerowy na koncu)
+         */
+        if (sprintf(msg, "%c %s", msg_type, cmd) < 0) { ERR("sprintf"); }
+
+        /*
+         * Wysylanie wiadomosci
+         */
+        if (bulk_write(socket, msg, cmd_size + 3) < 0) { ERR("write"); }
+
+        free(msg);
+        free(cmd);
+
+        if (TEMP_FAILURE_RETRY(close(socket)) < 0) { ERR("close"); }
     }
 
     return EXIT_SUCCESS;
-}
-
-ssize_t bulk_write(int fd, char *buf, size_t count) {
-    int c;
-    size_t len = 0;
-
-    do
-    {
-        c = TEMP_FAILURE_RETRY(write(fd, buf, count));
-        if(c < 0)
-            return c;
-        buf += c;
-        len += c;
-        count -= c;
-    }
-    while (count > 0);
-
-    return len;
-}
-
-void communicate(int socket) {
-
-}
-
-int connect_socket(char *name, uint16_t port) {
-    struct sockaddr_in addr;
-    int socketfd;
-    socketfd = make_socket();
-    addr = make_address(name, port);
-    if (connect(socketfd, (struct sockaddr *) &addr, sizeof(struct sockaddr_in)) < 0)
-    {
-        if (errno != EINTR)
-            ERR("connect");
-        else
-        {
-            fd_set wfds;
-            int status;
-            socklen_t size = sizeof(int);
-            FD_ZERO(&wfds);
-            FD_SET(socketfd, &wfds);
-            if (TEMP_FAILURE_RETRY(select(socketfd + 1, NULL, &wfds, NULL, NULL)) < 0) { ERR("select"); }
-            if (getsockopt(socketfd, SOL_SOCKET, SO_ERROR, &status, &size) < 0) { ERR("getsockopt"); }
-            if (status != 0) { ERR("connect"); }
-        }
-    }
-    return socketfd;
-}
-
-int make_socket() {
-    int sock;
-    sock = socket(PF_INET, SOCK_STREAM, 0);
-    if (sock < 0)
-        ERR("socket");
-
-    return sock;
-}
-
-int sethandler(void (*f)(int), int sigNo) {
-    struct sigaction act;
-    memset(&act, 0x00, sizeof(struct sigaction));
-    act.sa_handler = f;
-
-    if (-1 == sigaction(sigNo, &act, NULL))
-        ERR("sigaction");
-
-    return 0;
-}
-
-void usage(char *name) {
-    fprintf(stderr, "USAGE: %s [proxy server address] [proxy server port]\n", name);
-    exit(EXIT_FAILURE);
 }
