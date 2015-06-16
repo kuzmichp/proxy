@@ -35,6 +35,8 @@
 #define MAX_LOG_REC_LENGTH 64
 #define MAX_IN_DATA_LENGTH 65535
 
+#define MAX_RESP_SIZE 128
+
 typedef struct 
 {
     char name[64];
@@ -45,7 +47,7 @@ typedef struct
 typedef struct
 {
     char login[64];
-    char active[5];
+    int active;
     char tariff_plan[64];
     double bandwidth;
     double amount;

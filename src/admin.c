@@ -38,6 +38,12 @@ int main(int argc, char *argv[])
     char msg_type;
 
     /*
+     * Odpowiedz od serwera
+     */
+    char *resp;
+    ssize_t resp_size;
+
+    /*
      * ./admin [server address] [server port]
      */
     if (argc != 3)
@@ -148,6 +154,14 @@ int main(int argc, char *argv[])
          * Wysylanie wiadomosci
          */
         if (bulk_write(socket, msg, cmd_size + 3) < 0) { ERR("write"); }
+
+        /*
+         * Odbieranie odpowiedzi
+         */
+        if ((resp = (char *) malloc(MAX_RESP_SIZE * sizeof(char))) == NULL) { ERR("malloc"); }
+        if ((resp_size = bulk_read(socket, resp, MAX_RESP_SIZE)) < 0) { ERR("read"); }
+
+        fprintf(stderr, "%s\n", resp);
 
         free(msg);
         free(cmd);

@@ -32,8 +32,7 @@ void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_d
     /*
      * Sprawdzanie rozmiaru pakietu
      */
-    num = (char *) malloc(MAX_INT_DIGITS_NUM * sizeof(char));
-    if (num == NULL) { ERR("malloc"); }
+    if ((num = (char *) malloc(MAX_INT_DIGITS_NUM * sizeof(char))) == NULL) { ERR("malloc"); }
 
     if  ((num_length = sprintf(num, "%d", in_size)) < 0) { ERR("sprintf"); }
     if ((num = realloc(num, num_length)) == NULL) { ERR("realloc"); }
