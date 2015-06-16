@@ -27,8 +27,8 @@
 
 #define BACKLOG 3
 #define MAX_IN_DATA_LENGTH 65535
-#define MAX_LOGIN_LENGTH 16
-#define MAX_SERV_NAME_LENGTH 16
+#define MAX_LOGIN_LENGTH 64
+#define MAX_SERV_NAME_LENGTH 64
 #define MAX_INT_DIGITS_NUM 32
 #define DELIMITERS_NUM 4
 
@@ -37,16 +37,16 @@
 
 typedef struct 
 {
-    char name[32];
-    char host[32];
+    char name[64];
+    char host[64];
     int port;
 } service;
 
 typedef struct
 {
-    char login[32];
-    int active;
-    char tariff_plan[32];
+    char login[64];
+    char active[5];
+    char tariff_plan[64];
     double bandwidth;
     double amount;
 } client;
@@ -54,8 +54,8 @@ typedef struct
 typedef struct
 {
     int opt;
-    char service[32];
-    char host[32];
+    char service[64];
+    char host[64];
     int port;
 } cs_request;
 
@@ -77,7 +77,7 @@ typedef struct
     char type;
     char data_size[32];
     char login[64];
-    char serv_name[32];
+    char serv_name[64];
     char data[65535];
 } cl_msg;
 
@@ -146,7 +146,7 @@ struct sockaddr_in make_address(char *address, uint16_t port)
     addr.sin_port = htons (port);
 
     hostinfo = gethostbyname(address);
-    if(hostinfo == NULL) { ERR("gethostbyname"); }
+    if (hostinfo == NULL) { ERR("gethostbyname"); }
     addr.sin_addr = *(struct in_addr*) hostinfo->h_addr;
 
     return addr;

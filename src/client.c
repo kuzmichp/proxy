@@ -50,13 +50,15 @@ void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_d
     if (snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, cl_info.login, cl_info.service, in_data) < 0) { ERR("snprintf"); }
 }
 
-void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_data cl_info)
+void get_in_data(int in_sock, char *domain, int port, char *in_data, int *in_size, conn_data cl_info)
 {
-    int i;
-    int app_sock;
+    int app_sock, out_sock;
 
     fd_set base_rfds, rfds;
     sigset_t mask, old_mask;
+
+    FD_ZERO(&base_rfds);
+    FD_SET(in_sock, &base_rfds);
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -76,9 +78,6 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
 
     while (do_work)
     {
-        FD_ZERO(&base_rfds);
-        FD_SET(in_sock, &base_rfds);
-
         rfds = base_rfds;
 		app_sock = -1;
 
@@ -102,6 +101,12 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
                     prepare_message(&msg, &msg_size, cl_info, in_data, *in_size);
 
                     /*
+                     * Nawiazywanie polaczenia z serwerem proxy
+                     */
+                    fprintf(stderr, "Domain: %s\n", domain);
+                    out_sock = connect_socket(domain, port);
+
+                    /*
                      * Wysylanie danych do serwera proxy
                      */
                     if (TEMP_FAILURE_RETRY(send(out_sock, msg, msg_size, 0)) < 0) { ERR("send"); }
@@ -109,16 +114,13 @@ void get_in_data(int in_sock, int out_sock, char *in_data, int *in_size, conn_da
                     /*
                      * Czekanie na odpowiedz od serwera proxy
                      */
-                    if ((resp_size = bulk_read(out_sock, resp, MAX_IN_DATA_LENGTH)) < 0) { ERR("read"); }
+                    if ((resp_size = TEMP_FAILURE_RETRY(recv(out_sock, resp, MAX_IN_DATA_LENGTH, MSG_WAITALL))) < 0) { ERR("read"); }
 
                     fprintf(stderr, "Response from server: %li\n", resp_size);
-
-                    for (i = 0; i < resp_size; ++i)
-                    {
-                        fprintf(stderr, "%c", resp[i]);
-                    }
+                    fprintf(stderr, "%s\n", resp);
 
 					if (TEMP_FAILURE_RETRY(close(app_sock)) < 0) { ERR("close"); }
+                    if (TEMP_FAILURE_RETRY(close(out_sock)) < 0) { ERR("close"); }
 				}
             }
         }
@@ -139,9 +141,8 @@ int main(int argc, char *argv[])
 
     /*
      * in_sock sluzy do komunikacji z aplikacja
-     * out_sock sluzy do komunikacji z serwerem proxy
      */
-    int in_sock, out_sock;
+    int in_sock;
     int flags;
 
     /*
@@ -172,11 +173,6 @@ int main(int argc, char *argv[])
 	if (sethandler(sigint_handler, SIGINT)) { ERR("Setting SIGINT"); }
 
     /*
-     * Nawiazywanie polaczenia z serwerem proxy
-     */
-    out_sock = connect_socket(argv[2], atoi(argv[3]));
-
-    /*
      * ... z aplikacja
      */
     in_sock = bind_tcp_socket(atoi(argv[5]));
@@ -188,10 +184,9 @@ int main(int argc, char *argv[])
     /*
      * Glowna funkcja programu klienckiego
      */
-    get_in_data(in_sock, out_sock, in_data, &in_size, cl_info);
+    get_in_data(in_sock, argv[2], atoi(argv[3]), in_data, &in_size, cl_info);
 
     if (TEMP_FAILURE_RETRY(close(in_sock)) < 0) { ERR("close:"); }
-    if (TEMP_FAILURE_RETRY(close(out_sock)) < 0) { ERR("close:"); }
 
     return EXIT_SUCCESS;
 }

@@ -140,7 +140,9 @@ int main(int argc, char *argv[])
         /*
          * Dodawanie typu wiadomosci (dodaje byte zerowy na koncu)
          */
-        if (sprintf(msg, "%c %s", msg_type, cmd) < 0) { ERR("sprintf"); }
+        fprintf(stderr, "Wiadomosc: %s\n", cmd);
+
+        if (snprintf(msg, cmd_size + 3, "%c %s", msg_type, cmd) < 0) { ERR("sprintf"); }
 
         /*
          * Wysylanie wiadomosci

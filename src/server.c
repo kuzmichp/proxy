@@ -17,6 +17,8 @@ void usage(char *name)
 
 void *client_thread_func(void *arg)
 {
+    fprintf(stderr, "Cos przyszlo od klienta\n");
+
     int fd;
 
     thread_arg *targ = (thread_arg *) arg;
@@ -44,13 +46,6 @@ void *client_thread_func(void *arg)
     cl_msg client_msg;
 
     if (sscanf(targ->msg, "%c %s %s %s %s", &client_msg.type, client_msg.data_size, client_msg.login, client_msg.serv_name, client_msg.data) != 5) { ERR("sscanf"); }
-
-    printf("MSG: \n%s\n", targ->msg);
-
-    fprintf(stderr, "Size: %s\n", client_msg.data_size);
-    fprintf(stderr, "Type: %c\n", client_msg.type);
-    fprintf(stderr, "Login: %s\n", client_msg.login);
-    fprintf(stderr, "Service: %s\n", client_msg.serv_name);
 
     /*
      * Sprawdzanie pozycji separatorow
@@ -89,9 +84,93 @@ void *client_thread_func(void *arg)
 
     if (bulk_write(sock, resp, resp_size) < 0) { ERR("write"); }
 
+    if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) { ERR("pthread_sigmask"); }
+
+    if (TEMP_FAILURE_RETRY(close(fd)) == -1) { ERR("close"); }
     if (TEMP_FAILURE_RETRY(close(sock)) == -1) { ERR("close"); }
 
-    if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) { ERR("pthread_sigmask"); }
+    free(targ);
+    return NULL;
+}
+
+void *admin_thread_func(void *arg)
+{
+    thread_arg *targ = (thread_arg *) arg;
+
+    service **services = targ->services;
+    //client **clients = targ->clients;
+
+    int *serv_num = targ->services_num;
+    //int *cl_num = targ->clients_num;
+
+    pthread_mutex_t *s_mutex = targ->serv_mutex;
+    //pthread_mutex_t *cl_mutex = targ->cl_mutex;
+
+    char *msg = targ->msg;
+
+    char msg_type = (targ->msg)[0];
+
+    /*
+     * Zmienne do parsowania wiadomosci
+     */
+    service serv;
+    char name[64];
+    char host[64];
+    int port;
+    //client cl;
+
+    /* Dodawanie nowego serwisu */
+    if (msg_type == '1')
+    {
+        //if (sscanf(msg, "%s %s %s %d", &msg_type, serv.name, serv.host, &(serv.port)) != 4) { ERR("sscanf"); }
+        if (sscanf(msg, "%s %s %s %d", &msg_type, name, host, &port) != 4) { ERR("sscanf"); }
+
+        pthread_mutex_lock(s_mutex);
+
+        (*serv_num) += 1;
+        if ((*services = realloc(*services, (*serv_num) * sizeof(service))) == NULL) { ERR("realloc"); }
+
+        memcpy(&(serv.name), name, strlen(name));
+        memcpy(&(serv.host), host, strlen(host));
+        serv.port = port;
+
+        (*services)[(*serv_num) - 1] = serv;
+
+        pthread_mutex_unlock(s_mutex);
+
+        fprintf(stderr, "Dodano nowy serwis: %s %s %d\n", serv.name, serv.host, serv.port);
+    }
+    /* Usuwanie serwisu */
+    else if (msg_type == '2')
+    {
+
+    }
+    /* Dodawanie klienta */
+    else if (msg_type == '3')
+    {
+
+    }
+    /* Usuwanie klienta */
+    else if (msg_type == '4')
+    {
+
+    }
+    /* Pobieranie wartosci licznikow */
+    else if (msg_type == '5')
+    {
+
+    }
+    /* Blokowanie uzytkownika */
+    else if (msg_type == '6')
+    {
+
+    }
+    /* Odblokowanie uzytkownika */
+    else if (msg_type == '7')
+    {
+
+    }
+    else {}
 
     free(targ);
     return NULL;
@@ -107,8 +186,8 @@ void manage_connections(service **services, client **clients, int *services_num,
     char *msg = (char *) malloc(MAX_IN_DATA_LENGTH);
     ssize_t size;
 
-    //FD_ZERO(&base_rfds);
-    //FD_SET(in_socket, &base_rfds);
+    FD_ZERO(&base_rfds);
+    FD_SET(in_socket, &base_rfds);
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -132,13 +211,10 @@ void manage_connections(service **services, client **clients, int *services_num,
     /*
      * Zmienna używana jest to przechowywania informacji o tym, kto się połączył do serwera proxy
      */
-    bool cl = false;
+    int cl = 1;
 
     while (do_work)
     {
-        FD_ZERO(&base_rfds);
-        FD_SET(in_socket, &base_rfds);
-
         rfds = base_rfds;
 
         if (pselect(in_socket + 1, &rfds, NULL, NULL, NULL, &old_mask) > 0)
@@ -158,7 +234,7 @@ void manage_connections(service **services, client **clients, int *services_num,
                     /*
                      * Sprawdzanie typu wiadomości
                      */
-                    if (atoi(&msg[0]) == 0) { cl = true; }
+                    if (atoi(&msg[0]) == 0) { cl = 0; }
 
                     /*
                      * Pobieranie aktualnego czasu
@@ -170,7 +246,7 @@ void manage_connections(service **services, client **clients, int *services_num,
                     /*
                      * Dodawanie wpisu do logfile'a
                      */
-                    if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s%s has been connected\n", asctime(info), cl == true ? "client" : "admin")) < 0) { ERR("snprintf"); }
+                    if ((log_rec_size = snprintf(log_rec, MAX_LOG_REC_LENGTH, "%s%s has been connected\n", asctime(info), cl == 0 ? "client" : "admin")) < 0) { ERR("snprintf"); }
                     if (TEMP_FAILURE_RETRY(write(log_fd, log_rec, log_rec_size)) == -1) { ERR("write"); }
 
                     if ((targ = (thread_arg *) calloc(1, sizeof(thread_arg))) == NULL) { ERR("calloc"); }
@@ -191,7 +267,15 @@ void manage_connections(service **services, client **clients, int *services_num,
                     /*
                      * Uruchomienie watku
                      */
-                    if (pthread_create(&thread, NULL, client_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
+                    if (cl == 0)
+                    {
+                        if (pthread_create(&thread, NULL, client_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
+                    }
+                    else
+                    {
+                        if (pthread_create(&thread, NULL, admin_thread_func, (void *) targ) != 0) { ERR("pthread_create"); }
+                    }
+
                     if (pthread_detach(thread) != 0) { ERR("pthread_detach"); }
                 }
             }
@@ -208,6 +292,8 @@ void manage_connections(service **services, client **clients, int *services_num,
 
 int main(int argc, char *argv[])
 {
+    int i;
+
     /*
      * in_sock will be used to communicate with clients
      * out_sock will be used to communicate with services
@@ -275,6 +361,17 @@ int main(int argc, char *argv[])
 
     free(services);
     free(clients);
+
+    for (i = 0; i < strlen(services[0].name) + 1; ++i) {
+        fprintf(stderr, "%d", (int) (services[0].name)[i]);
+    }
+
+    fprintf(stderr, "\nSerwisy:\n");
+    for (i = 0; i < services_num; ++i)
+    {
+        fprintf(stderr, "%s %s %d", services[i].name, services[i].host, services[i].port);
+        fprintf(stderr, "\n");
+    }
 
     //TODO: Destroy mutexes
 
