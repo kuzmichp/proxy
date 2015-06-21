@@ -11,160 +11,126 @@ void sigint_handler(int sig)
 
 void usage(char *name)
 {
-    fprintf(stderr, "USAGE: %s [proxy server address] [proxy server port]\n", name);
+    fprintf(stderr, "USAGE: %s <proxy domain> <proxy port>\n", name);
     exit(EXIT_FAILURE);
 }
 
 int main(int argc, char *argv[])
 {
-    /*
-     * Pozycja menu
-     */
-    char *menu_item;
+    int i;
+	int sock;
 
-    char *cmd;
-    size_t max_cmd_size = MAX_CMD_SIZE;
-    ssize_t cmd_size;
+    // pozycja menu 
+    char menu_item[2];
 
+	// wprowadzone dane
+    char cmd[MAX_CMD_SIZE + 1];
+
+	// wiadomosc dla serwera
     char *msg;
 
-    int socket;
-
-    int is_working = 0;
-
-    char msg_type;
-
-    /*
-     * Odpowiedz od serwera
-     */
+	// odpowiedz od serwera
     char *resp;
     ssize_t resp_size;
 
-    /*
-     * ./admin [server address] [server port]
-     */
-    if (argc != 3)
-    {
-        usage(argv[0]);
-    }
+    if (argc != 3) { usage(argv[0]); }
 
-    sethandler(SIG_IGN, SIGPIPE);
-    if (sethandler(sigint_handler, SIGINT)) { ERR("Setting SIGINT"); }
+    if (sethandler(SIG_IGN, SIGPIPE)) { ERR("Seting SIGPIPE"); }
+    if (sethandler(sigint_handler, SIGINT)) { ERR("Seting SIGINT"); }
 
     /* Manage user input */
-    while (is_working == 0 && do_work)
+    while (do_work)
     {
         printf("\nMenu:\n"
                        "\n[1] - Dodaj nowy serwis\n"
                        "[2] - Usun istniejacy serwis\n"
-                       "[3] - Dodaj nowego klienta\n"
-                       "[4] - Usun istniejacego klietna\n"
-                       "[5] - Pobranie wartosci licznikow dla klientow\n"
+                       "[3] - Dodaj nowego uzytkownika\n"
+                       "[4] - Usun istniejacego uzytkownika\n"
+                       "[5] - Pobierz wartosci licznikow dla uzytkownikow\n"
                        "[6] - Zablokuj uzytkownika\n"
                        "[7] - Odblokuj uzytkownika\n"
                        "[...] - Exit\n");
         printf("\nWybor: ");
 
-        /*
-         * Pobieranie opcji wprowadzonej przez administratora
-         */
-        if ((menu_item = (char *) malloc((MAX_MENU_OPT_SIZE + 1) * sizeof(char))) == NULL) { ERR("malloc"); }
-        if ((fgets(menu_item, MAX_MENU_OPT_SIZE, stdin)) == NULL) { ERR("fgetc"); }
+        // wczytywanie pozycji menu
+        memset(menu_item, 0x00, 2*sizeof(char));
+        if (fgets(menu_item, 2, stdin) == NULL) { ERR("fgetc"); }
 
-        msg_type = menu_item[0];
+		// usuwanie znaku nowej linii, jesli istnieje
+		i = strlen(menu_item) - 1;
+		if (menu_item[i] == '\n') { menu_item[i] = '\0'; }
 
-        /*
-         * Alokacja pamieci dla wprowadzonych danych
-         */
-        if ((cmd = (char *) malloc((MAX_CMD_SIZE) * sizeof(char))) == NULL) { ERR("malloc"); }
+		switch (menu_item[0])
+		{
+			case '1':
+            	printf("Podaj dane serwisu, ktory chcesz dodac - [nazwa] [host] [port]: ");
+				break;
+			case '2':
+            	printf("Podaj nazwe serwisu, ktory chcesz usunac: ");
+				break;
+			case '3':
+            	printf("Podaj dane uzytkownika, ktorego chcesz dodac - [login] [aktywny] [plan taryfowy] [przepustowosc] [kwota]: ");
+				break;
+			case '4':
+            	printf("Podaj login uzytkownika, ktorego chcesz usunac: ");
+				break;
+			case '5':
+				break;
+			case '6':
+            	printf("Podaj login uzytkownika, ktorego chcesz zablokowac: ");
+				break;
+			case '7':
+            	printf("Podaj login uzytkownika, ktorego chcesz odblokowac: ");
+				break;
+			default:
+				printf("\nBledny wybor\n");			
+				exit(EXIT_FAILURE);
 
-        /*
-         * Wielki if else
-         */
-        if (msg_type == '1')
-        {
-            printf("Podaj dane serwisu, ktory chcesz dodac - [nazwa] [host] [port]: ");
+		}
 
-            /*
-             * Pobieranie danych
-             */
-            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-        }
-        else if (msg_type == '2')
-        {
-            printf("Podaj nazwe serwisu, ktory chcesz usunac: ");
+        // wczytywanie danych
+		memset(cmd, 0x00, MAX_CMD_SIZE + 1);
+		if (fgets(cmd, MAX_CMD_SIZE + 1, stdin) == NULL) { ERR("fgets"); }
+		
+		i = strlen(cmd) - 1;
+		if (cmd[i] == '\n') { cmd[i] = '\0'; }		
 
-            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-        }
-        else if (msg_type == '3')
-        {
-            printf("Podaj dane uzytkownika, ktorego chcesz dodac - [login] [aktywny] [plan taryfowy] [przepustowosc] [kwota]: ");
+		fprintf(stderr, "Wczytane dane:\n");
+		for (i = 0; i < strlen(cmd) + 1; i++)
+		{
+			fprintf(stderr, "%d", (int)cmd[i]);
+		}
 
-            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-        }
-        else if (msg_type == '4')
-        {
-            printf("Podaj login uzytkownika, ktorego chcesz usunac: ");
-
-            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-        }
-        else if (msg_type == '5')
-        {
-            cmd_size = 1;
-        }
-        else if (msg_type == '6')
-        {
-            printf("Podaj login uzytkownika, ktorego chcesz zablokowac: ");
-
-            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-        }
-        else if (msg_type == '7')
-        {
-            printf("Podaj login uzytkownika, ktorego chcesz odblokowac: ");
-
-            if ((cmd_size = getline(&cmd, &max_cmd_size, stdin)) < 0) { ERR("getline"); }
-        }
-        else
-        {
-            printf("Bledny wybor\n");
-            is_working = 1;
-        }
-
-        if ((cmd = realloc(cmd, cmd_size * sizeof(char))) == NULL) { ERR("realloc"); }
-
-        /*
-         * Laczenie sie z serwerem proxy
-         */
-        socket = connect_socket(argv[1], atoi(argv[2]));
+        // laczenie sie z serwerem proxy
+        sock = connect_socket(argv[1], atoi(argv[2]));
 
         /*
          * Alokacja pamieci na wiadomosc (TYP_WIADOMOSCI DANE)
          * 3 = TYP + SPACJA + BYTE ZEROWY
          */
-        if ((msg = (char *) malloc((cmd_size + 3) * sizeof(char))) == NULL) { ERR("malloc"); }
+        if ((msg = (char *) malloc((strlen(cmd) + 3) * sizeof(char))) == NULL) { ERR("malloc"); }
 
         /*
          * Dodawanie typu wiadomosci (dodaje byte zerowy na koncu)
          */
-        if (snprintf(msg, cmd_size + 3, "%c %s", msg_type, cmd) < 0) { ERR("sprintf"); }
+        if (snprintf(msg, strlen(cmd) + 3, "%c %s", menu_item[0], cmd) < 0) { ERR("sprintf"); }
 
         /*
          * Wysylanie wiadomosci
          */
-        if (bulk_write(socket, msg, cmd_size + 3) < 0) { ERR("write"); }
+        if (bulk_write(sock, msg, strlen(cmd) + 3) < 0) { ERR("write"); }
         fprintf(stderr, "Wyslano wiadomosc do serwera proxy\n");
 
         /*
          * Odbieranie odpowiedzi
          */
         if ((resp = (char *) malloc(MAX_RESP_SIZE * sizeof(char))) == NULL) { ERR("malloc"); }
-        if ((resp_size = bulk_read(socket, resp, MAX_RESP_SIZE)) < 0) { ERR("read"); }
+        if ((resp_size = bulk_read(sock, resp, MAX_RESP_SIZE)) < 0) { ERR("read"); }
         fprintf(stderr, "Otrzymano odpowiedz od serwera proxy: %s\n", resp);
 
         free(msg);
-        free(cmd);
 
-        if (TEMP_FAILURE_RETRY(close(socket)) < 0) { ERR("close"); }
+        if (TEMP_FAILURE_RETRY(close(sock)) < 0) { ERR("close"); }
     }
 
     return EXIT_SUCCESS;
