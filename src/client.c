@@ -2,6 +2,8 @@
 
 #include "header.h"
 
+#define MAX_MSG_SIZE 65535
+
 volatile sig_atomic_t do_work = 1;
 
 void sigint_handler(int sig)
@@ -15,45 +17,41 @@ void usage(char *name)
     exit(EXIT_FAILURE);
 }
 
-
-void prepare_message(char **msg, size_t *msg_size, conn_data cl_info, char *in_data, int in_size)
+void prepare_message(char *msg, int *msg_size, char *login, char *service, char *packet, int pckt_size)
 {
-    /*
-     * Rozmiar pakietu jest trzymany w tablicy char
-     */
-    char *num;
+    // rozmiar pakietu jest trzymany w postaci stringa
+    char num[MAX_PCKT_DIG_NUM];
     int num_length;
-
-    size_t login_length = strnlen(cl_info.login, MAX_LOGIN_LENGTH) + 1;
-    size_t service_length = strnlen(cl_info.service, MAX_SERV_NAME_LENGTH) + 1;
 
     char msg_type = '0';
 
-    /*
-     * Sprawdzanie rozmiaru pakietu
-     */
-    if ((num = (char *) malloc(MAX_INT_DIGITS_NUM * sizeof(char))) == NULL) { ERR("malloc"); }
+    // konwertowanie rozmiaru pakietu na string
+	if ((num_length = snprintf(num, MAX_PCKT_DIG_NUM + 1, "%d", pckt_size)) < 0) { ERR("snprintf"); }
 
-    if  ((num_length = sprintf(num, "%d", in_size)) < 0) { ERR("sprintf"); }
-    if ((num = realloc(num, num_length)) == NULL) { ERR("realloc"); }
-
-    /*
-     * +1 byte ze wzgledu na '\0', ktore snprintf dodaje na koncu
+   	/*
+ 	 * przygotowanie wiadomosci
+     * TYPE PACKET_SIZE LOGIN SERVICE PACKET
      */
-    *msg_size = (2 + DELIMITERS_NUM + login_length + service_length + num_length + in_size) * sizeof(char);
-    if ((*msg = realloc(*msg, *msg_size)) == NULL) { ERR("realloc"); }
-
-    /*
-     * TYPE SIZE_OF_DATA LOGIN SERVICE DATA
-     */
-    if (snprintf(*msg, *msg_size, "%c %s %s %s %s", msg_type, num, cl_info.login, cl_info.service, in_data) < 0) { ERR("snprintf"); }
+    if ((*msg_size = snprintf(msg, MAX_MSG_SIZE + 1, "%c %s %s %s %s", msg_type, num, login, service, packet)) < 0) { ERR("snprintf"); }
 }
 
-void get_in_data(int in_sock, char *domain, int port, char *in_data, int *in_size, conn_data cl_info)
+void communicate(int in_sock, char *domain, int port, char *login, char *service)
 {
     int app_sock, out_sock;
+	
+	// dane wysylane przez aplikacje zewnetrzna
+	char *packet;
+	ssize_t pckt_size;
 
-    fd_set base_rfds, rfds;
+    // wiadomosc wysylana do serwera proxy
+    char msg[MAX_MSG_SIZE];
+    int msg_size = 0;
+
+    // dpowiedz od serwera
+    char resp[MAX_PCKT_SIZE];
+    ssize_t resp_size;
+    
+	fd_set base_rfds, rfds;
     sigset_t mask, old_mask;
 
     FD_ZERO(&base_rfds);
@@ -62,18 +60,6 @@ void get_in_data(int in_sock, char *domain, int port, char *in_data, int *in_siz
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
     sigprocmask(SIG_BLOCK, &mask, &old_mask);
-
-    /*
-     * Wiadomosc wysylana do serwera proxy
-     */
-    char *msg;
-    size_t msg_size = 0;
-
-    /*
-     * Odpowiedz od serwera
-     */
-    char resp[MAX_IN_DATA_LENGTH];
-    ssize_t resp_size;
 
     while (do_work)
     {
@@ -88,44 +74,33 @@ void get_in_data(int in_sock, char *domain, int port, char *in_data, int *in_siz
 
      	    	if (app_sock >= 0)
                 {
-                    /*
-                     * Odbieranie danych od aplikacji
-                     */
-                    if ((*in_size = TEMP_FAILURE_RETRY(recv(app_sock, in_data, MAX_IN_DATA_LENGTH, 0))) == -1) { ERR("read"); }
+                    // odbieranie danych od aplikacji zewnetrznej
+					if ((packet = (char *) malloc(MAX_PCKT_SIZE*sizeof(char))) == NULL) { ERR("malloc"); }
+                    if ((pckt_size = TEMP_FAILURE_RETRY(recv(app_sock, packet, MAX_PCKT_SIZE, 0))) == -1) { ERR("read"); }
 
-                    /*
-                     * Przygotowanie wiadomosci dla serwera proxy
-                     */
-                    if ((msg = (char *) malloc(sizeof(char))) == NULL) { ERR("malloc"); };
-                    prepare_message(&msg, &msg_size, cl_info, in_data, *in_size);
-
-                    /*
-                     * Nawiazywanie polaczenia z serwerem proxy
-                     */
+                    // przygotowanie wiadomosci dla serwera proxy
+                    prepare_message(msg, &msg_size, login, service, packet, pckt_size);
+					
+                   	// wysylanie danych do serwera proxy
                     out_sock = connect_socket(domain, port);
+                    if (TEMP_FAILURE_RETRY(send(out_sock, msg, msg_size + 1, 0)) < 0) { ERR("send"); }
 
-                    /*
-                     * Wysylanie danych do serwera proxy
-                     */
-                    if (TEMP_FAILURE_RETRY(send(out_sock, msg, msg_size, 0)) < 0) { ERR("send"); }
-                    fprintf(stderr, "Wyslano wiadomosc do serwera proxy\n");
+                    // czekanie na odpowiedz od serwera proxy
+                    if ((resp_size = TEMP_FAILURE_RETRY(recv(out_sock, resp, MAX_PCKT_SIZE, MSG_WAITALL))) < 0) { ERR("read"); }
 
-                    free(msg);
-                    /*
-                     * Czekanie na odpowiedz od serwera proxy
-                     */
-                    if ((resp_size = TEMP_FAILURE_RETRY(recv(out_sock, resp, MAX_IN_DATA_LENGTH, MSG_WAITALL))) < 0) { ERR("read"); }
-                    fprintf(stderr, "Otrzymano odpowiedz od serwera proxy:\n%s", resp);
+					// zwracanie odpowiedzi do aplikacji zewnetrznej
+					if (TEMP_FAILURE_RETRY(send(app_sock, resp, resp_size, 0)) < 0) { ERR("send"); }
 
+					free(packet);
+					
 					if (TEMP_FAILURE_RETRY(close(app_sock)) < 0) { ERR("close"); }
-                    if (TEMP_FAILURE_RETRY(close(out_sock)) < 0) { ERR("close"); }
+					if (TEMP_FAILURE_RETRY(close(out_sock)) < 0) { ERR("close"); }
 				}
             }
         }
         else
         {
-            if (EINTR == errno)
-                continue;
+            if (EINTR == errno) continue;
             ERR("pselect");
         }
     }
@@ -135,24 +110,10 @@ void get_in_data(int in_sock, char *domain, int port, char *in_data, int *in_siz
 
 int main(int argc, char *argv[])
 {
-    /* app -> client <-> server proxy <-> service */
+    /* app <-> client <-> server proxy <-> service */
 
-    /*
-     * in_sock sluzy do komunikacji z aplikacja
-     */
-    int in_sock;
-    int flags;
-
-    /*
-     * Zawartosc pakietu przechowywana jest w in_data
-     */
-    char *in_data;
-    int in_size;
-
-    /*
-     * Tymczasowania struktura to trzymania loginu i nazwy serwera
-     */
-    conn_data cl_info;
+	// socket do komunikacji z aplikacja zewnetrzna
+    int sock, flags;
 
     /*
      * 0. program name
@@ -164,28 +125,17 @@ int main(int argc, char *argv[])
      */
     if (argc != 6) { usage(argv[0]); }
 
-    if (memcpy(cl_info.login, argv[1], strnlen(argv[1], MAX_LOGIN_LENGTH) + 1) == NULL) { ERR("memcpy"); };
-    if (memcpy(cl_info.service, argv[4], strnlen(argv[4], MAX_SERV_NAME_LENGTH) + 1) == NULL) { ERR("memcpy"); };
+    if (sethandler(SIG_IGN, SIGPIPE)) { ERR("Seting SIGPIPE"); }
+	if (sethandler(sigint_handler, SIGINT)) { ERR("Seting SIGINT"); }
 
-    if (sethandler(SIG_IGN, SIGPIPE)) { ERR("Setting SIGPIPE:"); }
-	if (sethandler(sigint_handler, SIGINT)) { ERR("Setting SIGINT"); }
+    // nasluchiwanie na polaczenie od aplikacji
+    sock = bind_tcp_socket(atoi(argv[5]));
+    flags = fcntl(sock, F_GETFL) | O_NONBLOCK;
+    if (fcntl(sock, F_SETFL, flags) == -1) { ERR("fcntl:"); }
 
-    /*
-     * Nasluchiwanie na polaczenie od aplikacji
-     */
-    in_sock = bind_tcp_socket(atoi(argv[5]));
-    flags = fcntl(in_sock, F_GETFL) | O_NONBLOCK;
-    if (fcntl(in_sock, F_SETFL, flags) == -1) { ERR("fcntl:"); }
+    // glowna funkcja programu klienckiego
+    communicate(sock, argv[2], atoi(argv[3]), argv[1], argv[4]);
 
-    in_data = (char *) calloc(MAX_IN_DATA_LENGTH, sizeof(char));
-
-    /*
-     * Glowna funkcja programu klienckiego
-     */
-    get_in_data(in_sock, argv[2], atoi(argv[3]), in_data, &in_size, cl_info);
-
-    if (TEMP_FAILURE_RETRY(close(in_sock)) < 0) { ERR("close:"); }
-
-    free(in_data);
+    if (TEMP_FAILURE_RETRY(close(sock)) < 0) { ERR("close"); }
     return EXIT_SUCCESS;
 }

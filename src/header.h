@@ -26,21 +26,21 @@
 		     exit(EXIT_FAILURE))
 
 #define BACKLOG 3
-#define MAX_IN_DATA_LENGTH 65535
+#define MAX_PCKT_SIZE 65535
 #define MAX_LOGIN_LENGTH 64
 #define MAX_SERV_NAME_LENGTH 64
 #define MAX_HOST_LENGTH 64
 #define MAX_LOG_REC_LENGTH 64
-#define MAX_INT_DIGITS_NUM 32
+#define MAX_PCKT_DIG_NUM 32 
 #define MAX_TARIFF_PLAN_LENGTH 32
 
-#define DELIMITERS_NUM 4
+#define DELIM_NUM 4
 #define MAX_RESP_SIZE 128
 
-#define MAX_MENU_OPT_SIZE 5
 #define MAX_CMD_SIZE 64
 
 #define MAX_PORT_SIZE 16
+#define MAX_MSG_SIZE 65535
 
 typedef struct 
 {
@@ -56,16 +56,9 @@ typedef struct
     char tariff_plan[MAX_TARIFF_PLAN_LENGTH];
     double bandwidth;
     double amount;
-    int bytes_num;
+	pthread_mutex_t act_mutex;
+	pthread_cond_t act_cond;
 } client;
-
-typedef struct
-{
-    int opt;
-    char service[MAX_SERV_NAME_LENGTH];
-    char host[MAX_HOST_LENGTH];
-    int port;
-} cs_request;
 
 typedef struct
 {
@@ -83,17 +76,11 @@ typedef struct
 typedef struct
 {
     char type;
-    char data_size[MAX_INT_DIGITS_NUM];
+    char data_size[MAX_PCKT_DIG_NUM];
     char login[MAX_LOGIN_LENGTH];
     char serv_name[MAX_SERV_NAME_LENGTH];
-    char data[MAX_IN_DATA_LENGTH];
+    char data[MAX_PCKT_SIZE];
 } cl_msg;
-
-typedef struct 
-{
-    char login[MAX_LOGIN_LENGTH];
-    char service[MAX_SERV_NAME_LENGTH];
-} conn_data;
 
 ssize_t bulk_write(int fd, char *buf, size_t count)
 {
